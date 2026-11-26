@@ -1,0 +1,1287 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>名偵探柯南：摩天大樓最後 180 秒｜雙人拆炸彈互動網頁</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Webduino / Web:Bit 官方函式庫（多節點備援載入） -->
+  <script src="https://blocklypro.webduino.io/components/jquery/dist/jquery.min.js"></script>
+  <script src="https://blocklypro.webduino.io/dist/lib/webduino-all-0.4.20.min.js"></script>
+  <script src="https://blocklypro.webduino.io/dist/webduino-blockly.min.js"></script>
+  <script src="https://blocklypro.webduino.io/dist/lib/firebase.min.js"></script>
+  <script src="https://blocklypro.webduino.io/dist/lib/runtime.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Noto Sans TC', 'Inter', sans-serif;
+    }
+    .digit-slot-active {
+      border-color: #facc15 !important;
+      box-shadow: 0 0 15px rgba(250, 204, 21, 0.55);
+      transform: translateY(-2px);
+    }
+    .digit-slot-locked {
+      border-color: #22c55e !important;
+      color: #86efac !important;
+      background-color: rgba(20, 83, 45, 0.45) !important;
+    }
+    .wire-cut {
+      opacity: 0.28;
+      filter: grayscale(85%);
+      position: relative;
+    }
+    .wire-cut::after {
+      content: "✂️ 已剪斷";
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: 800;
+      font-size: 13px;
+      text-shadow: 0 1px 4px #000;
+    }
+    @keyframes pulseRed {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+      50% { box-shadow: 0 0 24px 6px rgba(239, 68, 68, 0.35); }
+    }
+    .danger-pulse {
+      animation: pulseRed 1.5s infinite;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-3 sm:p-6">
+  <div class="max-w-5xl mx-auto space-y-4">
+
+    <!-- 頂部導覽與設定按鈕 -->
+    <header class="flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 px-4 py-3 rounded-2xl shadow-lg">
+      <div class="flex items-center gap-2.5">
+        <span class="text-2xl">🕵️‍♂️</span>
+        <div>
+          <div class="text-xs sm:text-sm font-bold tracking-widest text-amber-400 uppercase">DETECTIVE CONAN // BOMB DEFUSAL</div>
+          <div class="text-xs text-slate-400">雙人協力拆彈系統｜支援 Web:Bit 雙板 Wi-Fi 連線與鏡頭色卡感應</div>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button onclick="reconnectBoardsManual()" class="px-3 py-2 rounded-xl bg-sky-900/60 hover:bg-sky-800/80 border border-sky-700/70 text-sky-200 text-xs sm:text-sm font-semibold transition active:scale-95">
+          📡 重連雙板 Wi-Fi
+        </button>
+        <button onclick="resetGame()" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs sm:text-sm font-semibold transition active:scale-95">
+          🔄 重新開始
+        </button>
+        <button onclick="openSettings()" class="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs sm:text-sm font-extrabold shadow-md transition active:scale-95">
+          ⚙️ 關卡設定後台
+        </button>
+      </div>
+    </header>
+
+    <!-- 警報倒數看板 -->
+    <section id="alertBanner" class="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 text-slate-950 rounded-2xl p-4 sm:p-5 text-center shadow-xl border-2 border-yellow-200 transition-all">
+      <div id="alertCodeBadge" class="inline-block bg-slate-950 text-amber-400 text-xs font-black tracking-widest px-3 py-1 rounded-full mb-1">
+        ⚠️ EMERGENCY ALERT
+      </div>
+      <h1 id="alertHeadline" class="text-3xl sm:text-4xl font-black tracking-widest">CODE RED</h1>
+      <div class="flex items-center justify-center gap-3 mt-2 text-lg sm:text-2xl font-extrabold">
+        <span id="missionSubtitle">摩天大樓最後</span>
+        <span id="timerDisplay" class="bg-slate-950 text-yellow-300 font-mono text-3xl sm:text-4xl px-4 py-1 rounded-xl shadow-inner">180</span>
+        <span>秒</span>
+      </div>
+      <div id="gameStatusBanner" class="mt-2 text-sm sm:text-base font-bold text-slate-900">
+        拆彈進行中！請兩位偵探同時輸入密碼並比對「幾A幾B」線索
+      </div>
+    </section>
+
+    <!-- 第一階段：密碼比對結果與「放大版」偵探猜測紀錄 -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="bg-indigo-600 text-white text-xs font-extrabold px-2.5 py-1 rounded-lg">STAGE 01</span>
+          <h2 class="text-base sm:text-lg font-extrabold text-white">第一階段：雙人同步破解 4 位數密碼</h2>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span id="difficultyTag" class="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-800 text-amber-300 border border-slate-700">
+            難度：新手模式（顯示 A 位置＋B 數字）
+          </span>
+          <button id="verifyCodeBtn" onclick="checkFourDigitCode()" class="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-bold shadow transition active:scale-95">
+            🔍 送出密碼比對
+          </button>
+        </div>
+      </div>
+
+      <!-- 最新比對結果提示框 -->
+      <div id="codeFeedback" class="bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm sm:text-base text-amber-300 leading-relaxed">
+        玩家 A 與玩家 B 可<strong>同時獨立操作</strong>各自的板子！按 <strong>A 鍵</strong>切換 0~9，按 <strong>B 鍵</strong>鎖定該位數；雙方皆鎖定完成後將自動比對。
+      </div>
+
+      <!-- 放大版：歷史猜測紀錄表 -->
+      <div class="bg-slate-950/90 border border-slate-800 rounded-2xl p-4 sm:p-5">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <span class="text-base sm:text-lg font-extrabold text-slate-200 tracking-wide">🔎 偵探猜測紀錄（History Log）</span>
+          <span id="guessCountBadge" class="text-xs sm:text-sm font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-300">共 0 次嘗試</span>
+        </div>
+        <div id="guessHistoryList" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-base">
+          <div class="text-slate-400 italic col-span-full py-2 text-base">尚無猜測紀錄，雙方完成鎖定並比對後將顯示於此...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 雙人 Web:Bit 板子同步輸入區 -->
+    <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <!-- 玩家 A -->
+      <div class="bg-sky-100 text-slate-900 rounded-2xl p-4 sm:p-5 shadow-lg border-2 border-sky-300">
+        <div class="flex items-center justify-between mb-3 gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xl">👓</span>
+            <h2 class="font-black text-base sm:text-lg">玩家 A｜柯南（第 1、2 碼）</h2>
+          </div>
+          <span id="statusA" class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-700 text-slate-200">🔴 未設定 ID</span>
+        </div>
+        <div class="bg-slate-900 text-white rounded-xl p-4 text-center">
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
+            <span>Web:Bit A 同步輸入</span>
+            <span id="progressA" class="text-sky-300 font-bold">進度：0 / 2 鎖定</span>
+          </div>
+          <div class="flex justify-center gap-4 my-2">
+            <div id="slot0" class="w-16 h-20 rounded-xl bg-slate-950 border-2 border-slate-600 flex items-center justify-center text-4xl font-black transition-all digit-slot-active">0</div>
+            <div id="slot1" class="w-16 h-20 rounded-xl bg-slate-950 border-2 border-slate-600 flex items-center justify-center text-4xl font-black transition-all">0</div>
+          </div>
+          <div id="simA" class="flex flex-wrap justify-center gap-2 mt-3">
+            <button onclick="pressA('A')" class="px-3.5 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-sm shadow transition active:scale-95">
+              A 鍵 (+1 數字)
+            </button>
+            <button onclick="pressA('B')" class="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-sm shadow transition active:scale-95">
+              B 鍵 (確認鎖定)
+            </button>
+            <button onclick="resetPlayerA()" class="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold text-xs transition active:scale-95">
+              重選本組
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 玩家 B -->
+      <div class="bg-rose-100 text-slate-900 rounded-2xl p-4 sm:p-5 shadow-lg border-2 border-rose-300">
+        <div class="flex items-center justify-between mb-3 gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xl">🎀</span>
+            <h2 class="font-black text-base sm:text-lg">玩家 B｜協助者（第 3、4 碼）</h2>
+          </div>
+          <span id="statusB" class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-700 text-slate-200">🔴 未設定 ID</span>
+        </div>
+        <div class="bg-slate-900 text-white rounded-xl p-4 text-center">
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
+            <span>Web:Bit B 同步輸入</span>
+            <span id="progressB" class="text-rose-300 font-bold">進度：0 / 2 鎖定</span>
+          </div>
+          <div class="flex justify-center gap-4 my-2">
+            <div id="slot2" class="w-16 h-20 rounded-xl bg-slate-950 border-2 border-slate-600 flex items-center justify-center text-4xl font-black transition-all digit-slot-active">0</div>
+            <div id="slot3" class="w-16 h-20 rounded-xl bg-slate-950 border-2 border-slate-600 flex items-center justify-center text-4xl font-black transition-all">0</div>
+          </div>
+          <div id="simB" class="flex flex-wrap justify-center gap-2 mt-3">
+            <button onclick="pressB('A')" class="px-3.5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-extrabold text-sm shadow transition active:scale-95">
+              A 鍵 (+1 數字)
+            </button>
+            <button onclick="pressB('B')" class="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-sm shadow transition active:scale-95">
+              B 鍵 (確認鎖定)
+            </button>
+            <button onclick="resetPlayerB()" class="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold text-xs transition active:scale-95">
+              重選本組
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 第二階段：濾色片解謎與三條電線 -->
+    <section class="bg-slate-200 text-slate-900 rounded-2xl p-4 sm:p-6 shadow-xl border-2 border-slate-300 space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="bg-rose-600 text-white text-xs font-extrabold px-2.5 py-1 rounded-lg">STAGE 02</span>
+          <h2 class="text-base sm:text-lg font-black">最後拆彈區：濾色片解謎 × 三條假電線</h2>
+        </div>
+        <span id="phase2LockBadge" class="text-xs font-bold px-3 py-1 rounded-full bg-amber-200 text-amber-900 border border-amber-400">
+          🔒 尚未解鎖（請先破解第一階段密碼）
+        </span>
+      </div>
+
+      <!-- 濾色片視覺謎題區 -->
+      <div class="bg-slate-950 text-white rounded-xl p-4 text-center space-y-2 border border-slate-700">
+        <div id="filterInstructionText" class="text-base sm:text-lg font-extrabold text-yellow-300">
+          請戴上【紅色濾色片】觀察下方隱藏圖案！
+        </div>
+        <div class="inline-block rounded-xl overflow-hidden border-2 border-slate-600 shadow-inner max-w-full">
+          <canvas id="filterCanvas" width="380" height="110" class="max-w-full h-auto block"></canvas>
+        </div>
+        <div class="text-xs text-slate-400">提示：透過指定顏色的變色片過濾背景干擾，即可看清隱藏線索！</div>
+      </div>
+
+      <!-- 三條電線操作區 -->
+      <div class="space-y-3 bg-white/80 p-4 rounded-xl border border-slate-300">
+        <div onclick="handleWireClick('red')" class="flex items-center gap-3 cursor-pointer group">
+          <span class="w-8 h-8 rounded-full bg-red-500 text-white font-black flex items-center justify-center shrink-0 shadow">1</span>
+          <div id="wire-red" class="flex-1 h-5 rounded-full bg-red-500 group-hover:scale-y-125 transition-transform shadow-sm"></div>
+          <span class="font-extrabold text-red-700 w-12 text-right">紅線</span>
+        </div>
+        <div onclick="handleWireClick('blue')" class="flex items-center gap-3 cursor-pointer group">
+          <span class="w-8 h-8 rounded-full bg-blue-600 text-white font-black flex items-center justify-center shrink-0 shadow">2</span>
+          <div id="wire-blue" class="flex-1 h-5 rounded-full bg-blue-600 group-hover:scale-y-125 transition-transform shadow-sm"></div>
+          <span class="font-extrabold text-blue-700 w-12 text-right">藍線</span>
+        </div>
+        <div onclick="handleWireClick('yellow')" class="flex items-center gap-3 cursor-pointer group">
+          <span class="w-8 h-8 rounded-full bg-yellow-500 text-slate-950 font-black flex items-center justify-center shrink-0 shadow">3</span>
+          <div id="wire-yellow" class="flex-1 h-5 rounded-full bg-yellow-400 group-hover:scale-y-125 transition-transform shadow-sm"></div>
+          <span class="font-extrabold text-yellow-700 w-12 text-right">黃線</span>
+        </div>
+      </div>
+
+      <!-- 鏡頭色彩辨識區 -->
+      <div id="cameraSection" class="bg-slate-900 text-slate-100 rounded-xl p-4 flex flex-col sm:flex-row items-center gap-4 border border-slate-700">
+        <div class="relative w-60 h-44 bg-black rounded-xl overflow-hidden shrink-0 border-2 border-slate-600">
+          <video id="camVideo" autoplay playsinline muted class="w-full h-full object-cover"></video>
+          <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div id="camReticle" class="w-12 h-12 border-2 border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.28)] rounded-md transition-colors"></div>
+          </div>
+          <div class="absolute bottom-1.5 left-2 right-2 text-[11px] text-center bg-black/70 text-slate-200 rounded px-1.5 py-0.5">
+            將實體電線色塊對準中央白框
+          </div>
+        </div>
+        <div class="flex-1 space-y-2.5 text-center sm:text-left w-full">
+          <div class="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+            <span class="font-extrabold text-base text-sky-300">📷 鏡頭色卡判讀（對準正確顏色即暫停計時器）</span>
+            <span id="targetWireHintBadge" class="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-800 text-amber-300 border border-slate-600">
+              等待第一階段解鎖
+            </span>
+          </div>
+          <p class="text-xs text-slate-300">
+            拔下磁吸假電線對準白框，系統需<strong>連續穩定判讀約 1.2 秒</strong>（避免晃過誤觸）。判讀為題目正確顏色時，<strong>倒數計時器會立即暫停</strong>並解除炸彈！
+          </p>
+
+          <!-- 連續穩定辨識進度條 -->
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1.5">
+            <div class="flex justify-between text-xs font-bold">
+              <span id="camHoldLabel" class="text-slate-400">穩定判讀進度：尚未偵測到色卡</span>
+              <span id="camHoldPercent" class="font-mono text-amber-300">0%</span>
+            </div>
+            <div class="w-full h-3 bg-slate-800 rounded-full overflow-hidden">
+              <div id="camHoldBar" class="h-full bg-emerald-400 transition-all duration-75" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap justify-center sm:justify-start gap-2 pt-1">
+            <button type="button" onclick="startCamera(event)" class="px-3.5 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-extrabold transition">
+              ▶️ 啟動鏡頭
+            </button>
+            <button type="button" id="toggleScanBtn" onclick="toggleColorScan(event)" class="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold transition">
+              🎯 判讀狀態：待機中
+            </button>
+            <button type="button" onclick="calibrateColor('red')" class="px-2.5 py-1.5 rounded-lg bg-red-900/70 hover:bg-red-800 text-red-100 border border-red-600/60 text-xs font-semibold transition">
+              校準紅線
+            </button>
+            <button type="button" onclick="calibrateColor('blue')" class="px-2.5 py-1.5 rounded-lg bg-blue-900/70 hover:bg-blue-800 text-blue-100 border border-blue-600/60 text-xs font-semibold transition">
+              校準藍線
+            </button>
+            <button type="button" onclick="calibrateColor('yellow')" class="px-2.5 py-1.5 rounded-lg bg-yellow-900/70 hover:bg-yellow-800 text-yellow-100 border border-yellow-600/60 text-xs font-semibold transition">
+              校準黃線
+            </button>
+          </div>
+          <div id="camDetectReadout" class="text-xs font-mono text-amber-300">尚未啟動鏡頭（可在遊戲前先開啟鏡頭預備，不會重設進度）</div>
+      <div class="text-center text-sm font-bold text-slate-700">
+        請兩位玩家共同確認後，抽出並對準鏡頭（或直接點擊）正確線卡解除炸彈！
+      </div>
+    </section>
+  </div>
+
+  <!-- 關卡設定後台 Modal -->
+  <div id="settingsModal" class="fixed inset-0 bg-black/75 hidden items-center justify-center p-4 z-50">
+    <div class="bg-slate-900 text-slate-100 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5 sm:p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h2 class="text-lg sm:text-xl font-black text-amber-400">⚙️ 關卡設定後台（即時修改自動儲存）</h2>
+        <button onclick="closeSettings()" class="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold">✕</button>
+      </div>
+
+      <!-- 快速難度預設按鈕 -->
+      <div class="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2">
+        <div class="text-xs font-bold text-slate-400">⚡ 一鍵套用推理難度預設：</div>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" onclick="applyDifficultyPreset('easy')" class="px-3 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 text-emerald-200 text-xs font-bold transition">
+            🟢 教學簡單（A 提示位置+數字 ＋ B 提示數字）
+          </button>
+          <button type="button" onclick="applyDifficultyPreset('medium')" class="px-3 py-1.5 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 text-amber-200 text-xs font-bold transition">
+            🟡 新手中等（A 僅提示哪一碼 ＋ B 提示數字）
+          </button>
+          <button type="button" onclick="applyDifficultyPreset('hard')" class="px-3 py-1.5 rounded-lg bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/50 text-rose-200 text-xs font-bold transition">
+            🔴 偵探困難（純 1A2B 不透露位置與數字）
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-sm">
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">倒數時間（秒）</label>
+          <input type="number" id="cfgDuration" min="15" max="1800" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">猜錯密碼扣秒數（秒）</label>
+          <input type="number" id="cfgPenalty" min="0" max="60" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+        </div>
+
+        <div class="sm:col-span-2 bg-sky-950/30 border border-sky-800/60 rounded-xl p-3 space-y-2">
+          <div class="text-xs font-bold text-sky-300">📡 Web:Bit 雙板 Wi-Fi 雲端連線設定（填入板子 Device ID）</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">玩家 A（Web:Bit A）Device ID</label>
+              <input type="text" id="cfgDeviceA" placeholder="例如：10V7xxxx" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">玩家 B（Web:Bit B）Device ID</label>
+              <input type="text" id="cfgDeviceB" placeholder="例如：10V7yyyy" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+            </div>
+          </div>
+          <div class="text-[11px] text-slate-400">
+            ※ 請先透過 USB 控制台或 192.168.4.1 讓兩塊板子連上 2.4GHz Wi-Fi，並將取得的 Device ID 填入上方。
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">密碼產生模式</label>
+          <select id="cfgCodeMode" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white">
+            <option value="random">每次重新開始隨機 4 位不重複數</option>
+            <option value="fixed">指定固定 4 位數（方便備課測試）</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">固定密碼（4 位不重複數字）</label>
+          <input type="text" id="cfgFixedCode" maxlength="4" placeholder="7349" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" />
+        </div>
+
+        <!-- A 與 B 獨立提示微調 -->
+        <div>
+          <label class="block text-xs font-bold text-emerald-300 mb-1">A 提示方式（位置與數字皆正確）</label>
+          <select id="cfgHintModeA" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white">
+            <option value="pos_and_num">提示位置＋數字（如：第1碼(7)）</option>
+            <option value="pos_only">僅提示哪一碼正確（如：第1碼正確）</option>
+            <option value="none">不提示（僅顯示 A 數量）</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-amber-300 mb-1">B 提示方式（數字對但位置錯）</label>
+          <select id="cfgHintModeB" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white">
+            <option value="show_digits">提示命中數字（如：B 換位：9）</option>
+            <option value="none">不提示（僅顯示 B 數量）</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">第二階段拆線判定方式</label>
+          <select id="cfgWireMode" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white">
+            <option value="camera">鏡頭色彩辨識（對準鏡頭感應）</option>
+            <option value="manual">手動點選儀式感（不開鏡頭）</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">正確電線顏色（解答）</label>
+          <select id="cfgCorrectWire" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white">
+            <option value="red">1 號紅線 (RED)</option>
+            <option value="blue">2 號藍線 (BLUE)</option>
+            <option value="yellow">3 號黃線 (YELLOW)</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-bold text-slate-400 mb-1">濾色片任務提示文字</label>
+        <input type="text" id="cfgFilterText" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-sm" />
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-sm">
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">濾色片隱藏線索文字</label>
+          <input type="text" id="cfgSecretClue" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white" />
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">顯示網頁上的「模擬 A/B 鍵」按鈕</label>
+          <select id="cfgShowSim" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white">
+            <option value="true">顯示（方便單機測試）</option>
+            <option value="false">隱藏（僅用實體板子）</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-800">
+        <button onclick="restoreDefaultConfig()" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold">恢復預設值</button>
+        <div class="flex gap-2">
+          <button onclick="closeSettings()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-bold">取消</button>
+          <button onclick="saveAndApplyConfig()" class="px-5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-sm font-black shadow">儲存並套用</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自訂結果提示彈窗（取代 alert） -->
+  <div id="resultModal" class="fixed inset-0 bg-black/80 hidden items-center justify-center p-4 z-50">
+    <div id="resultModalBox" class="bg-slate-900 border-2 border-amber-400 rounded-2xl max-w-md w-full p-6 text-center space-y-4 shadow-2xl">
+      <div id="resultModalIcon" class="text-5xl">🎉</div>
+      <h3 id="resultModalTitle" class="text-2xl font-black text-white">拆彈成功！</h3>
+      <p id="resultModalDesc" class="text-slate-300 text-base leading-relaxed"></p>
+      <button onclick="closeResultModal()" class="w-full py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-base shadow">
+        關閉視窗
+      </button>
+    </div>
+  </div>
+
+  <canvas id="sampleCanvas" width="44" height="44" class="hidden"></canvas>
+
+  <script>
+    const STORAGE_KEY = "conan_bomb_config_v6";
+
+    const DEFAULT_CONFIG = {
+      duration: 180,
+      penalty: 5,
+      deviceA: "",
+      deviceB: "",
+      codeMode: "fixed",
+      fixedCode: "7349",
+      hintModeA: "pos_and_num",  // "pos_and_num" | "pos_only" | "none"
+      hintModeB: "show_digits",  // "show_digits" | "none"
+      wireMode: "camera",        // "camera" | "manual"
+      correctWire: "red",        // "red" | "blue" | "yellow"
+      filterText: "請戴上【紅色濾色片】觀察下方隱藏圖案！",
+      secretClue: "剪斷 1 號紅線",
+      showSim: true,
+      rgbProfiles: {
+        red:    { r: 210, g: 55,  b: 55 },
+        blue:   { r: 50,  g: 110, b: 220 },
+        yellow: { r: 225, g: 195, b: 45 }
+      }
+    };
+
+    const WIRE_LABELS = {
+      red: "1 號紅線",
+      blue: "2 號藍線",
+      yellow: "3 號黃線"
+    };
+
+    let config = loadConfig();
+    let secretCode = "7349";
+    let currentDigits = [0, 0, 0, 0];
+    let lockedA = 0; // 玩家 A 鎖定數量 (0, 1, 2)
+    let lockedB = 0; // 玩家 B 鎖定數量 (0, 1, 2)
+    let guessHistory = [];
+    let remainingTime = config.duration;
+    let timerId = null;
+    let gameOver = false;
+    let phase2Unlocked = false;
+    let camStream = null;
+    let camLoopId = null;
+
+    // 鏡頭連續穩定判讀計時狀態
+    const HOLD_REQUIRED_MS = 1500; // 連續穩定對準 1.5 秒才觸發
+    let holdingColor = null;
+    let holdStartTime = 0;
+    let lastSampleRgb = { r: 0, g: 0, b: 0 };
+    let colorScanArmed = false;    // 是否正式開啟拆線顏色判定（避免一解鎖就誤抓背景）
+    let phase2GraceUntil = 0;      // 解鎖後的緩衝保護時間戳
+    let lastPressTimeA = 0;
+    let lastPressTimeB = 0;
+    const DEBOUNCE_MS = 180;
+
+    function loadConfig() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return structuredClone(DEFAULT_CONFIG);
+        return { ...structuredClone(DEFAULT_CONFIG), ...JSON.parse(raw) };
+      } catch (e) {
+        return structuredClone(DEFAULT_CONFIG);
+      }
+    }
+
+    function saveConfigToStorage() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    }
+
+    function generateSecretCode() {
+      if (config.codeMode === "fixed" && /^\d{4}$/.test(config.fixedCode)) {
+        return config.fixedCode;
+      }
+      const pool = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      return pool.slice(0, 4).join("");
+    }
+
+    function resetGame() {
+      clearInterval(timerId);
+      gameOver = false;
+      phase2Unlocked = false;
+      secretCode = generateSecretCode();
+      currentDigits = [0, 0, 0, 0];
+      lockedA = 0;
+      lockedB = 0;
+      guessHistory = [];
+      remainingTime = config.duration;
+      holdingColor = null;
+      holdStartTime = 0;
+      colorScanArmed = false;
+      phase2GraceUntil = 0;
+      updateScanButtonUI();
+
+      // 重設上方警報橫幅樣式
+      const banner = document.getElementById("alertBanner");
+      banner.className = "bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 text-slate-950 rounded-2xl p-4 sm:p-5 text-center shadow-xl border-2 border-yellow-200 transition-all";
+      document.getElementById("alertCodeBadge").textContent = "⚠️ EMERGENCY ALERT";
+      document.getElementById("alertHeadline").textContent = "CODE RED";
+      document.getElementById("missionSubtitle").textContent = "摩天大樓最後";
+
+      document.getElementById("timerDisplay").textContent = remainingTime;
+      document.getElementById("gameStatusBanner").textContent =
+        "拆彈進行中！請玩家 A 與玩家 B 同時獨立輸入密碼並比對「幾A幾B」";
+      document.getElementById("codeFeedback").innerHTML =
+        `玩家 A 與玩家 B 可<strong>同時獨立操作</strong>各自的板子！按 <strong>A 鍵</strong>切換 0~9，按 <strong>B 鍵</strong>鎖定該位數；雙方皆鎖定完成後將自動比對。`;
+      document.getElementById("guessCountBadge").textContent = "共 0 次嘗試";
+      document.getElementById("guessHistoryList").innerHTML =
+        `<div class="text-slate-400 italic col-span-full py-2 text-base">尚無猜測紀錄，雙方完成鎖定並比對後將顯示於此...</div>`;
+
+      const lockBadge = document.getElementById("phase2LockBadge");
+      lockBadge.textContent = "🔒 尚未解鎖（請先破解第一階段密碼）";
+      lockBadge.className = "text-xs font-bold px-3 py-1 rounded-full bg-amber-200 text-amber-900 border border-amber-400";
+
+      const targetBadge = document.getElementById("targetWireHintBadge");
+      if (targetBadge) targetBadge.textContent = "等待第一階段解鎖";
+      updateHoldProgressUI(null, 0);
+
+      document.querySelectorAll("[id^='wire-']").forEach(el => el.classList.remove("wire-cut"));
+      renderDigitSlots();
+      applyConfigToUI();
+
+      timerId = setInterval(() => {
+        if (gameOver) return;
+        remainingTime -= 1;
+        document.getElementById("timerDisplay").textContent = Math.max(0, remainingTime);
+        if (remainingTime <= 0) {
+          triggerExplosion("時間耗盡，定時炸彈已引爆！");
+        }
+      }, 1000);
+    }
+
+    function getDifficultySummaryLabel() {
+      const aMap = { pos_and_num: "A 位置+數字", pos_only: "A 僅位置", none: "A 隱藏" };
+      const bMap = { show_digits: "B 顯示數字", none: "B 隱藏" };
+      return `提示設定：${aMap[config.hintModeA]} ＋ ${bMap[config.hintModeB]}`;
+    }
+
+    function applyConfigToUI() {
+      document.getElementById("simA").style.display = config.showSim ? "flex" : "none";
+      document.getElementById("simB").style.display = config.showSim ? "flex" : "none";
+      document.getElementById("filterInstructionText").textContent = config.filterText;
+      document.getElementById("cameraSection").style.display = config.wireMode === "camera" ? "flex" : "none";
+      document.getElementById("difficultyTag").textContent = getDifficultySummaryLabel();
+      renderPhase2Visuals();
+    }
+
+    function renderPhase2Visuals() {
+      const canvas = document.getElementById("filterCanvas");
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "#ff4d4d";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      for (let i = 0; i < 85; i++) {
+        ctx.fillStyle = i % 2 === 0 ? "rgba(255, 230, 0, 0.35)" : "rgba(30, 64, 175, 0.35)";
+        ctx.beginPath();
+        ctx.arc(
+          (i * 47) % canvas.width,
+          (i * 31) % canvas.height,
+          9 + (i % 15),
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+
+      ctx.fillStyle = "#991b1b";
+      ctx.font = "900 28px 'Noto Sans TC', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(config.secretClue || "剪斷正確電線", canvas.width / 2, canvas.height / 2);
+    }
+
+    function renderDigitSlots() {
+      for (let i = 0; i < 2; i++) {
+        const slot = document.getElementById(`slot${i}`);
+        slot.textContent = currentDigits[i];
+        slot.classList.remove("digit-slot-active", "digit-slot-locked");
+        if (i < lockedA) {
+          slot.classList.add("digit-slot-locked");
+        } else if (i === lockedA && !gameOver) {
+          slot.classList.add("digit-slot-active");
+        }
+      }
+      document.getElementById("progressA").textContent = `進度：${lockedA} / 2 鎖定`;
+
+      for (let i = 0; i < 2; i++) {
+        const slotIdx = i + 2;
+        const slot = document.getElementById(`slot${slotIdx}`);
+        slot.textContent = currentDigits[slotIdx];
+        slot.classList.remove("digit-slot-active", "digit-slot-locked");
+        if (i < lockedB) {
+          slot.classList.add("digit-slot-locked");
+        } else if (i === lockedB && !gameOver) {
+          slot.classList.add("digit-slot-active");
+        }
+      }
+      document.getElementById("progressB").textContent = `進度：${lockedB} / 2 鎖定`;
+    }
+
+    function pressA(btn) {
+      if (gameOver || phase2Unlocked) return;
+      const now = Date.now();
+      if (now - lastPressTimeA < DEBOUNCE_MS) return;
+      lastPressTimeA = now;
+
+      if (btn === "A") {
+        if (lockedA >= 2) lockedA = 0;
+        currentDigits[lockedA] = (currentDigits[lockedA] + 1) % 10;
+        renderDigitSlots();
+      } else if (btn === "B") {
+        if (lockedA < 2) {
+          lockedA += 1;
+          renderDigitSlots();
+          checkAutoSubmitBothReady();
+        }
+      }
+    }
+
+    function resetPlayerA() {
+      if (gameOver || phase2Unlocked) return;
+      lockedA = 0;
+      renderDigitSlots();
+    }
+
+    function pressB(btn) {
+      if (gameOver || phase2Unlocked) return;
+      const now = Date.now();
+      if (now - lastPressTimeB < DEBOUNCE_MS) return;
+      lastPressTimeB = now;
+
+      if (btn === "A") {
+        if (lockedB >= 2) lockedB = 0;
+        const idx = 2 + lockedB;
+        currentDigits[idx] = (currentDigits[idx] + 1) % 10;
+        renderDigitSlots();
+      } else if (btn === "B") {
+        if (lockedB < 2) {
+          lockedB += 1;
+          renderDigitSlots();
+          checkAutoSubmitBothReady();
+        }
+      }
+    }
+
+    function resetPlayerB() {
+      if (gameOver || phase2Unlocked) return;
+      lockedB = 0;
+      renderDigitSlots();
+    }
+
+    function checkAutoSubmitBothReady() {
+      if (lockedA === 2 && lockedB === 2) {
+        setTimeout(() => {
+          if (lockedA === 2 && lockedB === 2 && !gameOver && !phase2Unlocked) {
+            checkFourDigitCode();
+          }
+        }, 250);
+      } else if (lockedA === 2 && lockedB < 2) {
+        document.getElementById("codeFeedback").innerHTML =
+          `✅ <strong>玩家 A</strong> 已鎖定前兩碼（<span class="font-mono text-sky-300">${currentDigits[0]}${currentDigits[1]}</span>），等待 <strong>玩家 B</strong> 鎖定後兩碼...`;
+      } else if (lockedB === 2 && lockedA < 2) {
+        document.getElementById("codeFeedback").innerHTML =
+          `✅ <strong>玩家 B</strong> 已鎖定後兩碼（<span class="font-mono text-rose-300">${currentDigits[2]}${currentDigits[3]}</span>），等待 <strong>玩家 A</strong> 鎖定前兩碼...`;
+      }
+    }
+
+    function evaluateGuess(guessStr, targetStr) {
+      let A = 0;
+      let B = 0;
+      const aMatchedItems = [];
+      const bMatchedDigits = [];
+      const targetUsed = [false, false, false, false];
+      const guessUsed = [false, false, false, false];
+
+      for (let i = 0; i < 4; i++) {
+        if (guessStr[i] === targetStr[i]) {
+          A++;
+          targetUsed[i] = true;
+          guessUsed[i] = true;
+          aMatchedItems.push({ pos: i + 1, digit: guessStr[i] });
+        }
+      }
+
+      for (let i = 0; i < 4; i++) {
+        if (guessUsed[i]) continue;
+        for (let j = 0; j < 4; j++) {
+          if (!targetUsed[j] && guessStr[i] === targetStr[j]) {
+            B++;
+            targetUsed[j] = true;
+            if (!bMatchedDigits.includes(guessStr[i])) {
+              bMatchedDigits.push(guessStr[i]);
+            }
+            break;
+          }
+        }
+      }
+
+      return { A, B, aMatchedItems, bMatchedDigits };
+    }
+
+    function buildClueBadgesHTML(evalResult, isLarge = false) {
+      const chips = [];
+      const sizeClass = isLarge ? "text-sm sm:text-base px-3 py-1" : "text-xs sm:text-sm px-2.5 py-0.5";
+
+      if (config.hintModeA !== "none") {
+        if (evalResult.aMatchedItems.length > 0) {
+          const textA = config.hintModeA === "pos_and_num"
+            ? evalResult.aMatchedItems.map(item => `第${item.pos}碼(${item.digit})`).join("、")
+            : evalResult.aMatchedItems.map(item => `第${item.pos}碼`).join("、");
+          chips.push(
+            `<span class="inline-block bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 rounded-lg font-extrabold ${sizeClass}">✅ A 正確：${textA}</span>`
+          );
+        } else {
+          chips.push(
+            `<span class="inline-block bg-slate-800 text-slate-400 border border-slate-700 rounded-lg font-semibold ${sizeClass}">A 正確：無</span>`
+          );
+        }
+      }
+
+      if (config.hintModeB === "show_digits") {
+        if (evalResult.bMatchedDigits.length > 0) {
+          chips.push(
+            `<span class="inline-block bg-amber-500/20 text-amber-300 border border-amber-500/50 rounded-lg font-extrabold ${sizeClass}">🔄 B 換位：${evalResult.bMatchedDigits.join("、")}</span>`
+          );
+        } else {
+          chips.push(
+            `<span class="inline-block bg-slate-800 text-slate-400 border border-slate-700 rounded-lg font-semibold ${sizeClass}">B 換位：無</span>`
+          );
+        }
+      }
+
+      return chips.join(" ");
+    }
+
+    function renderGuessHistory() {
+      const container = document.getElementById("guessHistoryList");
+      document.getElementById("guessCountBadge").textContent = `共 ${guessHistory.length} 次嘗試`;
+
+      if (guessHistory.length === 0) {
+        container.innerHTML = `<div class="text-slate-400 italic col-span-full py-2 text-base">尚無猜測紀錄，雙方完成鎖定並比對後將顯示於此...</div>`;
+        return;
+      }
+
+      container.innerHTML = guessHistory.map((item, idx) => {
+        const isWin = item.A === 4;
+        const badgeStyle = isWin
+          ? "bg-emerald-500/25 text-emerald-300 border-emerald-400"
+          : "bg-amber-500/25 text-amber-300 border-amber-400";
+        const clueRow = buildClueBadgesHTML(item, true);
+
+        return `
+          <div class="bg-slate-900 border-2 ${isWin ? 'border-emerald-500/60' : 'border-slate-800'} px-4 py-3.5 rounded-2xl shadow-md space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-3">
+                <span class="text-sm sm:text-base text-slate-400 font-mono font-bold bg-slate-800 px-2.5 py-0.5 rounded-lg">#${idx + 1}</span>
+                <span class="font-mono font-black text-2xl sm:text-3xl tracking-[0.2em] text-white">${item.guess}</span>
+              </div>
+              <span class="font-mono font-black text-lg sm:text-xl px-3.5 py-1 rounded-xl border-2 ${badgeStyle}">
+                ${item.A}A${item.B}B
+              </span>
+            </div>
+            ${clueRow ? `<div class="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/90">${clueRow}</div>` : ""}
+          </div>
+        `;
+      }).join("");
+    }
+
+    function checkFourDigitCode() {
+      if (gameOver || phase2Unlocked) return;
+      if (lockedA < 2 || lockedB < 2) {
+        document.getElementById("codeFeedback").textContent =
+          `尚未完成 4 位數確認（玩家 A：${lockedA}/2、玩家 B：${lockedB}/2）！請雙方都按 B 鍵鎖定後再比對。`;
+        return;
+      }
+
+      const guess = currentDigits.join("");
+      const evalResult = evaluateGuess(guess, secretCode);
+      guessHistory.push({ guess, ...evalResult });
+      renderGuessHistory();
+
+      if (evalResult.A === 4) {
+        phase2Unlocked = true;
+        // 重置殘留色卡偵測狀態，給予 2.5 秒緩衝時間讓玩家看濾色片題目，且需點擊「開始判讀」才捕捉顏色
+        holdingColor = null;
+        holdStartTime = 0;
+        colorScanArmed = false;
+        phase2GraceUntil = performance.now() + 2500;
+        updateHoldProgressUI(null, 0);
+        updateScanButtonUI();
+
+        document.getElementById("codeFeedback").innerHTML =
+          `✅ 密碼 <strong class="text-emerald-400 font-mono text-xl">${guess}</strong> 完全正確（<span class="text-emerald-300 font-bold">4A0B</span>）！外殼已解鎖，請先戴上濾色片看線索，準備好再按下「開始顏色判讀」！`;
+        document.getElementById("gameStatusBanner").textContent =
+          "密碼已破解！請先戴上濾色片確認電線顏色，準備好對準鏡頭時再啟動顏色判讀！";
+        const unlockBadge = document.getElementById("phase2LockBadge");
+        unlockBadge.textContent = "🔓 已解鎖！請先戴濾色片看題目，再按下方「開始顏色判讀」";
+        unlockBadge.className = "text-xs font-bold px-3 py-1 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-400";
+
+        const targetBadge = document.getElementById("targetWireHintBadge");
+        if (targetBadge) targetBadge.textContent = "⏸️ 預覽中：按下「開始顏色判讀」後才捕捉";
+      } else {
+        remainingTime = Math.max(0, remainingTime - config.penalty);
+        document.getElementById("timerDisplay").textContent = remainingTime;
+
+        const clueHTML = buildClueBadgesHTML(evalResult, true);
+        lockedA = 0;
+        lockedB = 0;
+        renderDigitSlots();
+
+        document.getElementById("codeFeedback").innerHTML = `
+          <div class="flex flex-wrap items-center gap-2">
+            <span>❌ 猜測 <strong class="font-mono text-white text-xl">${guess}</strong> 錯誤（扣 ${config.penalty} 秒）➔ 比對結果：</span>
+            <span class="font-mono font-black text-xl px-3 py-0.5 rounded-lg bg-amber-400 text-slate-950">${evalResult.A}A${evalResult.B}B</span>
+          </div>
+          ${clueHTML ? `<div class="mt-2.5 flex flex-wrap items-center gap-2">${clueHTML}</div>` : ""}
+          <div class="mt-2 text-xs sm:text-sm text-slate-400">雙方進度已重設，可直接按 A 鍵微調數字後再按 B 鍵鎖定！</div>
+        `;
+
+        if (remainingTime <= 0) {
+          triggerExplosion("時間耗盡，定時炸彈已引爆！");
+        }
+      }
+    }
+
+    function handleWireClick(color) {
+      if (gameOver) return;
+      if (!phase2Unlocked) {
+        showResultModal("🔒", "外殼尚未解鎖", "請先完成第一階段 4 位數密碼破解（達到 4A0B），才能剪斷電線！");
+        return;
+      }
+      document.getElementById(`wire-${color}`).classList.add("wire-cut");
+      if (color === config.correctWire) {
+        triggerDefuseSuccess(`已成功剪斷正確電線（${WIRE_LABELS[color]}）！`);
+      } else {
+        triggerExplosion(`剪錯線了！你剪斷的是「${WIRE_LABELS[color]}」，炸彈隨即引爆！`);
+      }
+    }
+
+    function triggerDefuseSuccess(detailMsg = "") {
+      gameOver = true;
+      clearInterval(timerId); // 立即暫停炸彈倒數計時器
+      stopCamera();
+
+      // 將頂部警報橫幅切換為「安全解除・計時器已暫停」狀態
+      const banner = document.getElementById("alertBanner");
+      banner.className = "bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 text-white rounded-2xl p-4 sm:p-5 text-center shadow-xl border-2 border-emerald-200 transition-all";
+      document.getElementById("alertCodeBadge").textContent = "✅ BOMB DEFUSED // TIMER STOPPED";
+      document.getElementById("alertHeadline").textContent = "MISSION CLEAR";
+      document.getElementById("missionSubtitle").textContent = "計時已暫停！剩餘";
+
+      const msg = `${detailMsg} 成功解除摩天大樓危機，計時器凍結於剩餘 ${remainingTime} 秒！`;
+      document.getElementById("gameStatusBanner").textContent = `🎉 ${msg}`;
+      showResultModal("🎉", "拆彈成功！計時器已暫停", msg);
+    }
+
+    function triggerExplosion(reason) {
+      gameOver = true;
+      clearInterval(timerId);
+      stopCamera();
+
+      const banner = document.getElementById("alertBanner");
+      banner.className = "bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white rounded-2xl p-4 sm:p-5 text-center shadow-xl border-2 border-red-300 danger-pulse transition-all";
+      document.getElementById("alertCodeBadge").textContent = "💥 DETONATED";
+      document.getElementById("alertHeadline").textContent = "GAME OVER";
+
+      document.getElementById("gameStatusBanner").textContent = `💥 ${reason}`;
+      showResultModal("💥", "任務失敗・炸彈引爆", reason);
+    }
+
+    function showResultModal(icon, title, desc) {
+      document.getElementById("resultModalIcon").textContent = icon;
+      document.getElementById("resultModalTitle").textContent = title;
+      document.getElementById("resultModalDesc").textContent = desc;
+      const modal = document.getElementById("resultModal");
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    }
+
+    function closeResultModal() {
+      const modal = document.getElementById("resultModal");
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+    }
+
+    function updateHoldProgressUI(color, percent) {
+      const bar = document.getElementById("camHoldBar");
+      const label = document.getElementById("camHoldLabel");
+      const pctText = document.getElementById("camHoldPercent");
+      if (!bar || !label || !pctText) return;
+
+      const clamped = Math.min(100, Math.max(0, Math.round(percent)));
+      bar.style.width = `${clamped}%`;
+      pctText.textContent = `${clamped}%`;
+
+      if (!color || clamped === 0) {
+        label.textContent = "穩定判讀進度：尚未偵測到色卡";
+        bar.className = "h-full bg-emerald-400 transition-all duration-75";
+      } else {
+        label.textContent = `正在判讀：${WIRE_LABELS[color]}（請保持對準白框）`;
+        bar.className = color === config.correctWire
+          ? "h-full bg-emerald-400 transition-all duration-75"
+          : "h-full bg-rose-500 transition-all duration-75";
+      }
+    }
+
+    function updateScanButtonUI() {
+      const btn = document.getElementById("toggleScanBtn");
+      const targetBadge = document.getElementById("targetWireHintBadge");
+      if (!btn) return;
+      if (!phase2Unlocked) {
+        btn.textContent = "🔒 判讀狀態：需先解鎖密碼";
+        btn.className = "px-3.5 py-1.5 rounded-lg bg-slate-700 text-slate-300 text-xs font-extrabold transition";
+      } else if (colorScanArmed) {
+        btn.textContent = "🔴 顏色判讀中（點擊暫停）";
+        btn.className = "px-3.5 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-white text-xs font-extrabold transition animate-pulse";
+        if (targetBadge) targetBadge.textContent = "📷 正式判讀中：請將電線對準白框";
+      } else {
+        btn.textContent = "▶️ 開始顏色判讀（已準備好線卡）";
+        btn.className = "px-3.5 py-1.5 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-slate-950 text-xs font-extrabold transition shadow";
+        if (targetBadge) targetBadge.textContent = "⏸️ 待命中：準備好線卡後請按「開始顏色判讀」";
+      }
+    }
+
+    function toggleColorScan(e) {
+      if (e) e.preventDefault();
+      if (!phase2Unlocked) {
+        showResultModal("🔒", "尚未解鎖第二階段", "請先完成第一階段 4 位數密碼破解（4A0B），才能開啟拆線顏色判讀！");
+        return;
+      }
+      colorScanArmed = !colorScanArmed;
+      holdingColor = null;
+      holdStartTime = 0;
+      updateHoldProgressUI(null, 0);
+      updateScanButtonUI();
+    }
+
+    // 鏡頭色彩辨識（連續穩定 1.5 秒觸發，且不會重置遊戲狀態）
+    async function startCamera(e) {
+      if (e) e.preventDefault();
+      try {
+        stopCamera();
+        camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+        const video = document.getElementById("camVideo");
+        video.srcObject = camStream;
+        await video.play().catch(() => {});
+        document.getElementById("camDetectReadout").textContent = "鏡頭已啟動（預覽模式，不會自動引爆，準備好請按「開始顏色判讀」）";
+
+        const sCanvas = document.getElementById("sampleCanvas");
+        const sCtx = sCanvas.getContext("2d", { willReadFrequently: true });
+
+        const detect = () => {
+          if (gameOver || !camStream) return;
+          if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            const sx = Math.max(0, (video.videoWidth - 44) / 2);
+            const sy = Math.max(0, (video.videoHeight - 44) / 2);
+            sCtx.drawImage(video, sx, sy, 44, 44, 0, 0, 44, 44);
+            const data = sCtx.getImageData(0, 0, 44, 44).data;
+            let r = 0, g = 0, b = 0, count = data.length / 4;
+            for (let i = 0; i < data.length; i += 4) {
+              r += data[i]; g += data[i + 1]; b += data[i + 2];
+            }
+            r = Math.round(r / count);
+            g = Math.round(g / count);
+            b = Math.round(b / count);
+            lastSampleRgb = { r, g, b };
+
+            const matched = matchColorProfile(r, g, b);
+            const modeText = (phase2Unlocked && colorScanArmed) ? "【正式判讀中】" : "【預覽觀察中】";
+            document.getElementById("camDetectReadout").textContent =
+              `${modeText} 框內 RGB(${r}, ${g}, ${b}) ｜ 識別：${matched ? WIRE_LABELS[matched] : "未符合三原色卡"}`;
+
+            // 只有在「已解鎖 + 過了緩衝期 + 玩家按下開始顏色判讀」時，才真正執行拆線判定
+            if (phase2Unlocked && colorScanArmed && performance.now() >= phase2GraceUntil && matched) {
+              if (holdingColor !== matched) {
+                holdingColor = matched;
+                holdStartTime = performance.now();
+              }
+              const elapsed = performance.now() - holdStartTime;
+              const pct = (elapsed / HOLD_REQUIRED_MS) * 100;
+              updateHoldProgressUI(matched, pct);
+
+              if (elapsed >= HOLD_REQUIRED_MS) {
+                document.getElementById(`wire-${matched}`).classList.add("cut");
+                if (matched === config.correctWire) {
+                  triggerDefuseSuccess(`鏡頭已確認「${WIRE_LABELS[matched]}」正確無誤！`);
+                } else {
+                  triggerExplosion(`鏡頭判讀為錯誤的「${WIRE_LABELS[matched]}」，炸彈引爆！`);
+                }
+                return;
+              }
+            } else {
+              holdingColor = null;
+              holdStartTime = 0;
+              updateHoldProgressUI(null, 0);
+            }
+          }
+          camLoopId = requestAnimationFrame(detect);
+        };
+        camLoopId = requestAnimationFrame(detect);
+      } catch (err) {
+        document.getElementById("camDetectReadout").textContent =
+          "無法開啟鏡頭（請確認 HTTPS / 瀏覽器鏡頭權限，或改用直接點擊電線模式）。";
+      }
+    }
+
+    function stopCamera() {
+      if (camLoopId) cancelAnimationFrame(camLoopId);
+      if (camStream) {
+        camStream.getTracks().forEach(t => t.stop());
+        camStream = null;
+      }
+    }
+
+    function matchColorProfile(r, g, b) {
+      let bestColor = null;
+      let bestDist = 72; // 收緊色彩容許距離，避免桌面或膚色被誤判成色卡
+      for (const [colorName, prof] of Object.entries(config.rgbProfiles)) {
+        const dist = Math.hypot(r - prof.r, g - prof.g, b - prof.b);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestColor = colorName;
+        }
+      }
+      return bestColor;
+    }
+
+    function calibrateColor(targetColor) {
+      if (!camStream) {
+        showResultModal("📷", "請先啟動鏡頭", "請先點擊「▶️ 啟動鏡頭」，將對應顏色的實體電線對準白框後再按校準！");
+        return;
+      }
+      config.rgbProfiles[targetColor] = { ...lastSampleRgb };
+      saveConfigToStorage();
+      showResultModal(
+        "🎯",
+        `已校準「${WIRE_LABELS[targetColor]}」色卡`,
+        `已將目前鏡頭中央框的顏色 RGB(${lastSampleRgb.r}, ${lastSampleRgb.g}, ${lastSampleRgb.b}) 儲存為「${WIRE_LABELS[targetColor]}」標準值！`
+      );
+    }
+
+    // Webduino / Web:Bit 雙板 Wi-Fi 雲端連線
+    function setBoardBadgeState(player, state, text) {
+      const badge = document.getElementById(player === "A" ? "statusA" : "statusB");
+      if (!badge) return;
+      badge.textContent = text;
+      if (state === "connected") {
+        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-700 text-emerald-100";
+      } else if (state === "connecting") {
+        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-amber-600 text-white animate-pulse";
+      } else {
+        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-slate-700 text-slate-200";
+      }
+    }
+
+    function bindWebBitButtons(board, handlerFn) {
+      // 相容不同版次 Webduino / Web:Bit 的按鍵屬性與底層腳位 (pin4=A, pin10=B)
+      let btnA = null;
+      let btnB = null;
+
+      if (typeof getPullupButton === "function") {
+        btnA = getPullupButton(board, 4);
+        btnB = getPullupButton(board, 10);
+      } else {
+        btnA = board.buttonA || board.btnA || (typeof board.getPin === "function" ? board.getPin(4) : null);
+        btnB = board.buttonB || board.btnB || (typeof board.getPin === "function" ? board.getPin(10) : null);
+      }
+
+      if (btnA && typeof btnA.on === "function") {
+        btnA.on("pressed", () => handlerFn("A"));
+      }
+      if (btnB && typeof btnB.on === "function") {
+        btnB.on("pressed", () => handlerFn("B"));
+      }
+    }
+
+    // 動態備援載入 Webduino SDK（若主 CDN 被學校防火牆阻擋時自動切換備用網址）
+    function ensureWebduinoSdkLoaded() {
+      return new Promise((resolve) => {
+        if (typeof boardReady === "function" || (window.webduino && window.webduino.board)) {
+          resolve(true);
+          return;
+        }
+        const fallbackUrls = [
+          "https://webbit.webduino.io/blockly/dist/lib/webduino-all-0.4.20.min.js",
+          "https://webduino.io/components/webduino-js/dist/webduino-all.min.js"
+        ];
+        let idx = 0;
+        const tryNext = () => {
+          if (typeof boardReady === "function" || (window.webduino && window.webduino.board)) {
+            resolve(true);
+            return;
+          }
+          if (idx >= fallbackUrls.length) {
+            resolve(false);
+            return;
+          }
+          const s = document.createElement("script");
+          s.src = fallbackUrls[idx++];
+          s.onload = () => setTimeout(tryNext, 200);
+          s.onerror = () => tryNext();
+          document.head.appendChild(s);
+        };
+        tryNext();
+      });
+    }
+
+    async function connectSingleBoard(player, deviceId, handlerFn) {
+      if (!deviceId) {
+        setBoardBadgeState(player, "idle", "🔴 未設定 ID");
+        return;
+      }
+
+      setBoardBadgeState(player, "connecting", "🟡 載入 SDK 中...");
+      const sdkReady = await ensureWebduinoSdkLoaded();
+
+      if (!sdkReady) {
+        setBoardBadgeState(player, "idle", "🔴 SDK 載入失敗（請檢查網路）");
+        return;
+      }
+
+      setBoardBadgeState(player, "connecting", `🟡 Wi-Fi 連線中 (${deviceId})`);
+
+      // 設定 15 秒連線逾時提醒
+      const timeoutHandle = setTimeout(() => {
+        const badge = document.getElementById(player === "A" ? "statusA" : "statusB");
+        if (badge && badge.textContent.includes("連線中")) {
+          setBoardBadgeState(player, "idle", `🔴 連線逾時 (${deviceId})`);
+        }
+      }, 15000);
+
+      try {
+        // 使用 Web:Bit 官方標準 boardReady 連線 API
+        if (typeof boardReady === "function") {
+          boardReady({ board: "Bit", device: deviceId, transport: "mqtt", multi: true }, (board) => {
+            clearTimeout(timeoutHandle);
+            board.samplingInterval = 50;
+            setBoardBadgeState(player, "connected", `🟢 已連線 (${deviceId})`);
+            bindWebBitButtons(board, handlerFn);
+          });
+        } else if (window.webduino && window.webduino.board && window.webduino.board.Bit) {
+          const board = new window.webduino.board.Bit({ device: deviceId, transport: "mqtt" });
+          board.on("ready", () => {
+            clearTimeout(timeoutHandle);
+            board.samplingInterval = 50;
+            setBoardBadgeState(player, "connected", `🟢 已連線 (${deviceId})`);
+            bindWebBitButtons(board, handlerFn);
+          });
+        } else {
+          clearTimeout(timeoutHandle);
+          setBoardBadgeState(player, "idle", "🔴 找不到 Web:Bit 驅動");
+        }
+      } catch (err) {
+        clearTimeout(timeoutHandle);
+        setBoardBadgeState(player, "idle", `🔴 連線異常`);
+      }
+    }
+
+    function connectWebduinoBoards() {
+      connectSingleBoard("A", config.deviceA, pressA);
+      connectSingleBoard("B", config.deviceB, pressB);
+    }
+
+    function reconnectBoardsManual() {
+      if (!config.deviceA && !config.deviceB) {
+        showResultModal(
+          "📡",
+          "尚未輸入開發板 Device ID",
+          "請先點擊右上角「⚙️ 關卡設定後台」，分別填入玩家 A 與玩家 B 的 Web:Bit Device ID 並儲存，即可透過 Wi-Fi 連線！"
+        );
+        return;
+      }
+      connectWebduinoBoards();
+    }
+
+    // 設定後台 Modal 操作
+    function applyDifficultyPreset(level) {
+      if (level === "easy") {
+        document.getElementById("cfgHintModeA").value = "pos_and_num";
+        document.getElementById("cfgHintModeB").value = "show_digits";
+      } else if (level === "medium") {
+        document.getElementById("cfgHintModeA").value = "pos_only";
+        document.getElementById("cfgHintModeB").value = "show_digits";
+      } else {
+        document.getElementById("cfgHintModeA").value = "none";
+        document.getElementById("cfgHintModeB").value = "none";
+      }
+    }
+
+    function openSettings() {
+      document.getElementById("cfgDuration").value = config.duration;
+      document.getElementById("cfgPenalty").value = config.penalty;
+      document.getElementById("cfgDeviceA").value = config.deviceA;
+      document.getElementById("cfgDeviceB").value = config.deviceB;
+      document.getElementById("cfgCodeMode").value = config.codeMode;
+      document.getElementById("cfgFixedCode").value = config.fixedCode;
+      document.getElementById("cfgHintModeA").value = config.hintModeA;
+      document.getElementById("cfgHintModeB").value = config.hintModeB;
+      document.getElementById("cfgWireMode").value = config.wireMode;
+      document.getElementById("cfgCorrectWire").value = config.correctWire;
+      document.getElementById("cfgFilterText").value = config.filterText;
+      document.getElementById("cfgSecretClue").value = config.secretClue;
+      document.getElementById("cfgShowSim").value = String(config.showSim);
+      const modal = document.getElementById("settingsModal");
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    }
+
+    function closeSettings() {
+      const modal = document.getElementById("settingsModal");
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+    }
+
+    function saveAndApplyConfig() {
+      config.duration = Math.max(10, Number(document.getElementById("cfgDuration").value) || 180);
+      config.penalty = Math.max(0, Number(document.getElementById("cfgPenalty").value) || 0);
+      config.deviceA = document.getElementById("cfgDeviceA").value.trim();
+      config.deviceB = document.getElementById("cfgDeviceB").value.trim();
+      config.codeMode = document.getElementById("cfgCodeMode").value;
+      config.fixedCode = document.getElementById("cfgFixedCode").value.trim() || "7349";
+      config.hintModeA = document.getElementById("cfgHintModeA").value;
+      config.hintModeB = document.getElementById("cfgHintModeB").value;
+      config.wireMode = document.getElementById("cfgWireMode").value;
+      config.correctWire = document.getElementById("cfgCorrectWire").value;
+      config.filterText = document.getElementById("cfgFilterText").value.trim() || DEFAULT_CONFIG.filterText;
+      config.secretClue = document.getElementById("cfgSecretClue").value.trim() || DEFAULT_CONFIG.secretClue;
+      config.showSim = document.getElementById("cfgShowSim").value === "true";
+
+      saveConfigToStorage();
+      closeSettings();
+      connectWebduinoBoards();
+      resetGame();
+    }
+
+    function restoreDefaultConfig() {
+      config = structuredClone(DEFAULT_CONFIG);
+      saveConfigToStorage();
+      openSettings();
+    }
+
+    window.onload = function () {
+      connectWebduinoBoards();
+      resetGame();
+    };
+  </script>
+</body>
+</html>
