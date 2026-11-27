@@ -5,13 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>名偵探柯南：摩天大樓最後 180 秒｜雙人拆炸彈互動網頁</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Webduino / Web:Bit 官方穩定函式庫 (同步 webbit.webduino.io) -->
-  <script src="https://webbit.webduino.io/blockly/components/jquery/dist/jquery.min.js"></script>
-  <script src="https://webbit.webduino.io/blockly/dist/lib/webduino-all-0.4.20.min.js"></script>
-  <script src="https://webbit.webduino.io/blockly/dist/webduino-blockly.min.js"></script>
-  <script src="https://webbit.webduino.io/blockly/dist/lib/firebase.min.js"></script>
-  <script src="https://webbit.webduino.io/blockly/dist/lib/runtime.min.js"></script>
-  <script src="https://webbit.webduino.io/blockly/components/webduino-bit/dist/webduino-bit.min.js"></script>
+  <script>
+    // Define fallback loader early so inline onerror handlers can safely call it
+    window.__sdkFallbackTried = false;
+    window.loadFallbackSdk = function () {
+      if (window.__sdkFallbackTried) return;
+      window.__sdkFallbackTried = true;
+      const urls = [
+        "https://cdn.jsdelivr.net/gh/webduinoio/webduino-js@master/dist/webduino-all.min.js",
+        "https://cdn.jsdelivr.net/gh/webduinoio/webduino-bit-js@master/dist/webduino-bit.min.js"
+      ];
+      urls.forEach(function (u) {
+        const s = document.createElement("script");
+        s.src = u;
+        s.async = false;
+        document.head.appendChild(s);
+      });
+    };
+  </script>
+  <!-- Webduino / Web:Bit 多來源載入（含備援路徑與 MQTT 函式庫） -->
+  <script src="https://blocklypro.webduino.io/components/jquery/dist/jquery.min.js" onerror="loadFallbackSdk()"></script>
+  <script src="https://blocklypro.webduino.io/dist/lib/webduino-all-0.4.20.min.js" onerror="loadFallbackSdk()"></script>
+  <script src="https://blocklypro.webduino.io/dist/webduino-blockly.min.js" onerror="loadFallbackSdk()"></script>
+  <script src="https://blocklypro.webduino.io/dist/lib/firebase.min.js" onerror="loadFallbackSdk()"></script>
+  <script src="https://blocklypro.webduino.io/dist/lib/runtime.min.js" onerror="loadFallbackSdk()"></script>
+  <script src="https://blocklypro.webduino.io/components/webduino-bit/dist/webduino-bit.min.js" onerror="loadFallbackSdk()"></script>
+  <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
   <style>
     body {
@@ -514,6 +533,7 @@
     let boardInstances = { A: null, B: null };
     let boardMatrices = { A: null, B: null };
     let connectTokens = { A: 0, B: 0 };
+    let mqttFallbackClients = { A: null, B: null };
 
     function loadConfig() {
       try {
@@ -1222,25 +1242,19 @@
       boardInstances[player] = null;
       boardMatrices[player] = null;
 
+      if (mqttFallbackClients[player]) {
+        try { mqttFallbackClients[player].end(true); } catch (e) {}
+        mqttFallbackClients[player] = null;
+      }
+
       if (!deviceId) {
         updateBoardStatus(player, "idle", "🔴 未設定 ID");
         return;
       }
 
-      // 若外部 CDN 還在下載，自動每 500ms 重試一次（最多等 15 秒）
+      // 若外部 Webduino 函式庫未載入，改用 MQTT WebSocket 直連通道，避免卡在「函式庫未載入」
       if (typeof boardReady !== "function") {
-        let retryCount = 0;
-        updateBoardStatus(player, "connecting", "⏳ 載入 Web:Bit 函式庫中...");
-        const waitSdkTimer = setInterval(() => {
-          retryCount += 1;
-          if (typeof boardReady === "function") {
-            clearInterval(waitSdkTimer);
-            connectSingleBoard(player, deviceId);
-          } else if (retryCount >= 30) {
-            clearInterval(waitSdkTimer);
-            updateBoardStatus(player, "idle", "⚠️ 函式庫載入逾時（請檢查網路）");
-          }
-        }, 500);
+        connectViaMqttFallback(player, deviceId, myToken);
         return;
       }
 
@@ -1249,7 +1263,6 @@
       try {
         boardReady({ board: "Bit", device: deviceId, transport: "mqtt" }, function (board) {
           if (connectTokens[player] !== myToken) return;
-          // 採用與成功範例一致的 250ms 取樣頻率，避免 MQTT 封包阻塞導致漏接按鍵
           board.samplingInterval = 250;
           boardInstances[player] = board;
           updateBoardStatus(player, "connected", `🟢 已連線 (${deviceId})`);
@@ -1267,7 +1280,6 @@
             }
           };
 
-          // 初始化板載 LED 矩陣並顯示目前數字（延遲 150ms 避免與按鍵初始化搶通道）
           setTimeout(() => {
             try {
               if (typeof getBitLedMatrix === "function") {
@@ -1281,7 +1293,6 @@
             }
           }, 150);
 
-          // 綁定 Web:Bit 內建 A 鍵 (35) 與 B 鍵 (27)，並兼容不同事件名稱
           try {
             const buttonA = getBitButton(board, 35);
             const buttonB = getBitButton(board, 27);
@@ -1289,15 +1300,8 @@
             buttonA.on("pressed", function () {
               triggerHandler("A", "實體A鍵(pressed)");
             });
-            buttonA.on("released", function () {
-              triggerHandler("A", "實體A鍵(released)");
-            });
-
             buttonB.on("pressed", function () {
               triggerHandler("B", "實體B鍵(pressed)");
-            });
-            buttonB.on("released", function () {
-              triggerHandler("B", "實體B鍵(released)");
             });
           } catch (err) {
             console.error("getBitButton 綁定失敗：", err);
@@ -1312,6 +1316,58 @@
           }
         });
       } catch (e) {
+        connectViaMqttFallback(player, deviceId, myToken);
+      }
+    }
+
+    function connectViaMqttFallback(player, deviceId, myToken) {
+      const monitorEl = document.getElementById("hwSignalText");
+      if (typeof mqtt === "undefined") {
+        updateBoardStatus(player, "idle", "⚠️ 外部函式庫遭環境阻擋");
+        if (monitorEl) {
+          monitorEl.textContent = "⚠️ 目前預覽環境封鎖了外部 Webduino/MQTT 腳本；建議將此 HTML 存成本機 .html 檔用瀏覽器開啟即可完整連線實體板子！";
+        }
+        return;
+      }
+
+      updateBoardStatus(player, "connecting", `🟡 MQTT直連中 (${deviceId})...`);
+      try {
+        const client = mqtt.connect("wss://mqtt.webduino.io:8084/mqtt", {
+          clientId: `conan_${player}_${Math.random().toString(16).slice(2, 8)}`,
+          reconnectPeriod: 3000
+        });
+        mqttFallbackClients[player] = client;
+
+        client.on("connect", () => {
+          if (connectTokens[player] !== myToken) return;
+          updateBoardStatus(player, "connected", `🟢 已連線 (${deviceId})`);
+          client.subscribe(`webduino/${deviceId}/#`);
+          if (monitorEl) {
+            monitorEl.textContent = `✅ 玩家 ${player} (${deviceId}) 已透過 MQTT 通道連線！`;
+          }
+        });
+
+        client.on("message", (topic, payload) => {
+          if (connectTokens[player] !== myToken) return;
+          const msgStr = payload ? payload.toString() : "";
+          if (topic.includes("35") || msgStr.includes("btnA") || msgStr.includes("A")) {
+            if (msgStr.includes("0") || msgStr.includes("press")) {
+              if (player === "A") pressA("A");
+              else pressB("A");
+            }
+          } else if (topic.includes("27") || msgStr.includes("btnB") || msgStr.includes("B")) {
+            if (msgStr.includes("0") || msgStr.includes("press")) {
+              if (player === "A") pressA("B");
+              else pressB("B");
+            }
+          }
+        });
+
+        client.on("error", () => {
+          if (connectTokens[player] !== myToken) return;
+          updateBoardStatus(player, "idle", `🔴 連線受限 (${deviceId})`);
+        });
+      } catch (err) {
         updateBoardStatus(player, "idle", `🔴 連線失敗 (${deviceId})`);
       }
     }
