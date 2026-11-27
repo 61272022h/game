@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>名偵探柯南：摩天大樓最後 180 秒｜雙人拆炸彈互動網頁</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Webduino / Web:Bit 官方函式庫 -->
-  <script src="https://blocklypro.webduino.io/components/jquery/dist/jquery.min.js"></script>
-  <script src="https://blocklypro.webduino.io/dist/lib/webduino-all-0.4.20.min.js"></script>
-  <script src="https://blocklypro.webduino.io/dist/webduino-blockly.min.js"></script>
-  <script src="https://blocklypro.webduino.io/dist/lib/firebase.min.js"></script>
-  <script src="https://blocklypro.webduino.io/dist/lib/runtime.min.js"></script>
-  <script src="https://blocklypro.webduino.io/components/webduino-bit/dist/webduino-bit.min.js"></script>
+  <!-- Webduino / Web:Bit 官方穩定函式庫 (同步 webbit.webduino.io) -->
+  <script src="https://webbit.webduino.io/blockly/components/jquery/dist/jquery.min.js"></script>
+  <script src="https://webbit.webduino.io/blockly/dist/lib/webduino-all-0.4.20.min.js"></script>
+  <script src="https://webbit.webduino.io/blockly/dist/webduino-blockly.min.js"></script>
+  <script src="https://webbit.webduino.io/blockly/dist/lib/firebase.min.js"></script>
+  <script src="https://webbit.webduino.io/blockly/dist/lib/runtime.min.js"></script>
+  <script src="https://webbit.webduino.io/blockly/components/webduino-bit/dist/webduino-bit.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
   <style>
     body {
@@ -1227,8 +1227,20 @@
         return;
       }
 
+      // 若外部 CDN 還在下載，自動每 500ms 重試一次（最多等 15 秒）
       if (typeof boardReady !== "function") {
-        updateBoardStatus(player, "idle", "⚠️ 函式庫未載入");
+        let retryCount = 0;
+        updateBoardStatus(player, "connecting", "⏳ 載入 Web:Bit 函式庫中...");
+        const waitSdkTimer = setInterval(() => {
+          retryCount += 1;
+          if (typeof boardReady === "function") {
+            clearInterval(waitSdkTimer);
+            connectSingleBoard(player, deviceId);
+          } else if (retryCount >= 30) {
+            clearInterval(waitSdkTimer);
+            updateBoardStatus(player, "idle", "⚠️ 函式庫載入逾時（請檢查網路）");
+          }
+        }, 500);
         return;
       }
 
