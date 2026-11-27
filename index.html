@@ -194,6 +194,12 @@
       </div>
     </section>
 
+    <!-- 雙板硬體訊號即時診斷條 -->
+    <div id="hwSignalMonitor" class="bg-slate-900/90 border border-slate-800 rounded-xl px-4 py-2 text-xs font-mono text-slate-400 flex flex-wrap items-center justify-between gap-2">
+      <span>🔌 硬體按鍵訊號監聽：等待板子按鍵觸發...</span>
+      <span class="text-slate-500">Web:Bit A鍵=Pin35 / B鍵=Pin27</span>
+    </div>
+
     <!-- 第二階段：濾色片解謎與三條電線 -->
     <section class="bg-slate-200 text-slate-900 rounded-2xl p-4 sm:p-6 shadow-xl border-2 border-slate-300 space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
@@ -1073,57 +1079,81 @@
       saveConfigToStorage();
       showResultModal(
         "🎯",
-        `已校準「${WIRE_LABELS[targetColor]}」色卡`,
-        `已將目前鏡頭中央框的顏色 RGB(${lastSampleRgb.r}, ${lastSampleRgb.g}, ${lastSampleRgb.b}) 儲存為「${WIRE_LABELS[targetColor]}」標準值！`
+        `已校準「${WIRE_LABELS[targetColor]}」顏色`,
+        `已將目前白框內的 RGB(${lastSampleRgb.r}, ${lastSampleRgb.g}, ${lastSampleRgb.b}) 儲存為「${WIRE_LABELS[targetColor]}」的現場燈光基準色！`
       );
     }
 
-    // Webduino / Web:Bit 雙板 Wi-Fi 雲端連線
     function setBoardBadgeState(player, state, text) {
       const badge = document.getElementById(player === "A" ? "statusA" : "statusB");
       if (!badge) return;
       badge.textContent = text;
       if (state === "connected") {
-        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-700 text-emerald-100";
+        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-600 text-white shadow";
       } else if (state === "connecting") {
-        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-amber-600 text-white animate-pulse";
+        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-amber-500 text-slate-950 animate-pulse";
       } else {
         badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-slate-700 text-slate-200";
       }
     }
 
-    function bindWebBitButtons(board, handlerFn) {
-      // 1. 先初始化 Web:Bit 官方腳位對應 (bitGPIO)
-      if (typeof bitGPIO === "function") {
-        bitGPIO(board);
-      }
+    function bindWebBitButtons(board, handlerFn, playerLabel = "") {
+      const monitor = document.getElementById("hwSignalMonitor");
+      const triggerOnce = (key) => {
+        if (monitor) {
+          monitor.innerHTML = `<span class="text-emerald-400 font-bold">✅ 收到 [${playerLabel}] 實體「${key} 鍵」訊號！（${new Date().toLocaleTimeString()}）</span><span class="text-slate-400">Pin35 / Pin27 正常運作中</span>`;
+        }
+        handlerFn(key);
+      };
 
-      // 2. 取得 Web:Bit 官方實體按鍵腳位：A 鍵 = Pin 35，B 鍵 = Pin 27
-      let btnA = null;
-      let btnB = null;
+      // 1. 取得 bitGPIO 轉換後的腳位控制器（關鍵：getPullupButton 必須傳入 gpio 物件，而非 board）
+      const gpio = (typeof bitGPIO === "function") ? bitGPIO(board) : board;
 
+      let boundCount = 0;
+
+      // 2. Web:Bit 教育版標準拉高按鈕綁定（A鍵 = Pin 35，B鍵 = Pin 27）
       if (typeof getPullupButton === "function") {
-        btnA = getPullupButton(board, 35);
-        btnB = getPullupButton(board, 27);
-      } else if (typeof getButton === "function") {
-        btnA = getButton(board, 35);
-        btnB = getButton(board, 27);
-      } else {
-        btnA = board.buttonA || board.btnA || (typeof board.getPin === "function" ? board.getPin(35) : null);
-        btnB = board.buttonB || board.btnB || (typeof board.getPin === "function" ? board.getPin(27) : null);
+        try {
+          const pullupA = getPullupButton(gpio, 35);
+          const pullupB = getPullupButton(gpio, 27);
+          if (pullupA && typeof pullupA.on === "function") {
+            pullupA.on("pressed", () => triggerOnce("A"));
+            boundCount++;
+          }
+          if (pullupB && typeof pullupB.on === "function") {
+            pullupB.on("pressed", () => triggerOnce("B"));
+            boundCount++;
+          }
+        } catch (e) {}
       }
 
-      if (btnA && typeof btnA.on === "function") {
-        btnA.on("pressed", () => handlerFn("A"));
-      }
-      if (btnB && typeof btnB.on === "function") {
-        btnB.on("pressed", () => handlerFn("B"));
+      // 3. 備援：若使用標準 getButton 或內建 buttonA/B 屬性
+      if (boundCount === 0 && typeof getButton === "function") {
+        try {
+          const stdA = getButton(board, 35);
+          const stdB = getButton(board, 27);
+          if (stdA && typeof stdA.on === "function") {
+            stdA.on("pressed", () => triggerOnce("A"));
+            boundCount++;
+          }
+          if (stdB && typeof stdB.on === "function") {
+            stdB.on("pressed", () => triggerOnce("B"));
+            boundCount++;
+          }
+        } catch (e) {}
       }
 
-      // 3. 連線就緒時讓 Web:Bit 矩陣燈閃一下綠色打勾，方便同學確認板子已啟動按鍵
+      if (boundCount === 0) {
+        const fallbackA = board.buttonA || board.btnA;
+        const fallbackB = board.buttonB || board.btnB;
+        if (fallbackA && typeof fallbackA.on === "function") fallbackA.on("pressed", () => triggerOnce("A"));
+        if (fallbackB && typeof fallbackB.on === "function") fallbackB.on("pressed", () => triggerOnce("B"));
+      }
+
+      // 4. 連線就緒時讓 Web:Bit 矩陣燈閃一下綠色，確認已綁定完成
       try {
         if (typeof getMatrix === "function") {
-          const matrix = getMatrix(board, 4, 25);
+          const matrix = getMatrix(gpio, 4, 25);
           if (matrix && typeof matrix.setColor === "function") {
             matrix.setColor("#00ff66");
             setTimeout(() => matrix.off && matrix.off(), 600);
@@ -1194,7 +1224,7 @@
             clearTimeout(timeoutHandle);
             board.samplingInterval = 50;
             setBoardBadgeState(player, "connected", `🟢 已連線 (${deviceId})`);
-            bindWebBitButtons(board, handlerFn);
+            bindWebBitButtons(board, handlerFn, `玩家 ${player}`);
           });
         } else if (window.webduino && window.webduino.board && window.webduino.board.Bit) {
           const board = new window.webduino.board.Bit({ device: deviceId, transport: "mqtt" });
@@ -1202,7 +1232,7 @@
             clearTimeout(timeoutHandle);
             board.samplingInterval = 50;
             setBoardBadgeState(player, "connected", `🟢 已連線 (${deviceId})`);
-            bindWebBitButtons(board, handlerFn);
+            bindWebBitButtons(board, handlerFn, `玩家 ${player}`);
           });
         } else {
           clearTimeout(timeoutHandle);
