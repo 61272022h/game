@@ -1093,16 +1093,24 @@
     }
 
     function bindWebBitButtons(board, handlerFn) {
-      // 相容不同版次 Webduino / Web:Bit 的按鍵屬性與底層腳位 (pin4=A, pin10=B)
+      // 1. 先初始化 Web:Bit 官方腳位對應 (bitGPIO)
+      if (typeof bitGPIO === "function") {
+        bitGPIO(board);
+      }
+
+      // 2. 取得 Web:Bit 官方實體按鍵腳位：A 鍵 = Pin 35，B 鍵 = Pin 27
       let btnA = null;
       let btnB = null;
 
       if (typeof getPullupButton === "function") {
-        btnA = getPullupButton(board, 4);
-        btnB = getPullupButton(board, 10);
+        btnA = getPullupButton(board, 35);
+        btnB = getPullupButton(board, 27);
+      } else if (typeof getButton === "function") {
+        btnA = getButton(board, 35);
+        btnB = getButton(board, 27);
       } else {
-        btnA = board.buttonA || board.btnA || (typeof board.getPin === "function" ? board.getPin(4) : null);
-        btnB = board.buttonB || board.btnB || (typeof board.getPin === "function" ? board.getPin(10) : null);
+        btnA = board.buttonA || board.btnA || (typeof board.getPin === "function" ? board.getPin(35) : null);
+        btnB = board.buttonB || board.btnB || (typeof board.getPin === "function" ? board.getPin(27) : null);
       }
 
       if (btnA && typeof btnA.on === "function") {
@@ -1111,6 +1119,17 @@
       if (btnB && typeof btnB.on === "function") {
         btnB.on("pressed", () => handlerFn("B"));
       }
+
+      // 3. 連線就緒時讓 Web:Bit 矩陣燈閃一下綠色打勾，方便同學確認板子已啟動按鍵
+      try {
+        if (typeof getMatrix === "function") {
+          const matrix = getMatrix(board, 4, 25);
+          if (matrix && typeof matrix.setColor === "function") {
+            matrix.setColor("#00ff66");
+            setTimeout(() => matrix.off && matrix.off(), 600);
+          }
+        }
+      } catch (e) {}
     }
 
     // 動態備援載入 Webduino SDK（若主 CDN 被學校防火牆阻擋時自動切換備用網址）
