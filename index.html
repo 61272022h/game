@@ -103,7 +103,7 @@
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <span id="difficultyTag" class="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-800 text-amber-300 border border-slate-700">
-            難度：新手模式（顯示 A 位置＋B 數字）
+            難度：教學模式（A:位置+數字｜B:顯示數字）
           </span>
           <button type="button" id="verifyCodeBtn" onclick="checkFourDigitCode()" class="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-bold shadow transition active:scale-95">
             🔍 送出密碼比對
@@ -211,8 +211,8 @@
 
     <!-- 雙板硬體訊號即時診斷條 -->
     <div id="hwSignalMonitor" class="bg-slate-900/90 border border-slate-800 rounded-xl px-4 py-2.5 text-xs font-mono text-slate-300 flex flex-wrap items-center justify-between gap-2">
-      <span>🔌 硬體按鍵訊號監聽：等待板子按鍵觸發...</span>
-      <span class="text-slate-500">Pin35(A鍵) / Pin27(B鍵) 數位電位＋BitButton 雙通道監聽</span>
+      <span id="hwSignalText">🔌 硬體按鍵訊號監聽：等待板子按鍵觸發...</span>
+      <span class="text-slate-500">Web:Bit A鍵(35) / B鍵(27) ＋ LED 矩陣同步</span>
     </div>
 
     <!-- 第二階段：濾色片解謎與三條電線 -->
@@ -232,7 +232,7 @@
         <div id="filterInstructionText" class="text-base sm:text-lg font-extrabold text-yellow-300">
           請戴上【紅色濾色片】觀察下方隱藏圖案！
         </div>
-        <div class="inline-block rounded-xl overflow-hidden border-2 border-slate-600 shadow-inner max-w-full">
+        <div class="inline-block rounded-xl overflow-hidden border-2 border-slate-600 shadow-inner max-w-full bg-white">
           <canvas id="filterCanvas" width="380" height="110" class="max-w-full h-auto block"></canvas>
         </div>
         <div class="text-xs text-slate-400">提示：透過指定顏色的變色片過濾背景干擾，即可看清隱藏線索！</div>
@@ -490,8 +490,8 @@
     let config = loadConfig();
     let secretCode = "7349";
     let currentDigits = [0, 0, 0, 0];
-    let lockedA = 0;
-    let lockedB = 0;
+    let lockedA = 0; // 0, 1, 2
+    let lockedB = 0; // 0, 1, 2
     let guessHistory = [];
     let remainingTime = config.duration;
     let timerId = null;
@@ -506,9 +506,14 @@
     let lastSampleRgb = { r: 0, g: 0, b: 0 };
     let colorScanArmed = false;
     let phase2GraceUntil = 0;
+
+    // 防彈跳與雙板連線實例管理
     let lastPressTimeA = 0;
     let lastPressTimeB = 0;
-    const DEBOUNCE_MS = 180;
+    const DEBOUNCE_MS = 200;
+    let boardInstances = { A: null, B: null };
+    let boardMatrices = { A: null, B: null };
+    let connectTokens = { A: 0, B: 0 };
 
     function loadConfig() {
       try {
@@ -608,51 +613,59 @@
       const labelA = config.hintModeA === "pos_and_num"
         ? "A:位置+數字"
         : config.hintModeA === "pos_only"
-          ? "A:僅位置"
-          : "A:僅數量";
-      const labelB = config.hintModeB === "show_digits" ? "B:提示數字" : "B:僅數量";
+        ? "A:僅提示位置"
+        : "A:無提示";
+      const labelB = config.hintModeB === "show_digits" ? "B:顯示數字" : "B:無提示";
       const diffTag = document.getElementById("difficultyTag");
-      if (diffTag) diffTag.textContent = `難度微調（${labelA} ＋ ${labelB}）`;
+      if (diffTag) {
+        diffTag.textContent = `難度設定（${labelA} ｜ ${labelB}）`;
+      }
 
-      updateScanButtonUI();
-      renderPhase2Visuals();
-    }
+      const targetBadge = document.getElementById("targetWireHintBadge");
+      if (targetBadge) {
+        if (!phase2Unlocked) {
+          targetBadge.textContent = "等待第一階段解鎖";
+          targetBadge.className = "text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-800 text-amber-300 border border-slate-600";
+        } else {
+          targetBadge.textContent = `題目正確電線：${WIRE_LABELS[config.correctWire]}`;
+          targetBadge.className = "text-xs font-bold px-2.5 py-0.5 rounded-full bg-emerald-900/70 text-emerald-200 border border-emerald-500/60";
+        }
+      }
 
-    function quickConnectPlayer(player) {
-      const inputId = player === "A" ? "quickDeviceA" : "quickDeviceB";
-      const inputEl = document.getElementById(inputId);
-      if (!inputEl) return;
-      const devId = inputEl.value.trim();
-      if (player === "A") {
-        config.deviceA = devId;
-        saveConfigToStorage();
-        connectSingleBoard("A", config.deviceA, pressA);
-      } else {
-        config.deviceB = devId;
-        saveConfigToStorage();
-        connectSingleBoard("B", config.deviceB, pressB);
+      const scanBtn = document.getElementById("toggleScanBtn");
+      if (scanBtn) {
+        if (!phase2Unlocked) {
+          scanBtn.textContent = "🎯 判讀狀態：待機中（解鎖後開啟）";
+          scanBtn.className = "px-3.5 py-1.5 rounded-lg bg-slate-700 text-slate-300 text-xs font-extrabold transition";
+        } else if (colorScanArmed) {
+          scanBtn.textContent = "🟢 判讀狀態：自動偵測中";
+          scanBtn.className = "px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold transition";
+        } else {
+          scanBtn.textContent = "⏸️ 判讀狀態：已暫停（點擊恢復）";
+          scanBtn.className = "px-3.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold transition";
+        }
       }
     }
 
     function renderDigitSlots() {
       for (let i = 0; i < 4; i++) {
-        const slot = document.getElementById(`slot${i}`);
-        if (!slot) continue;
-        slot.textContent = currentDigits[i];
-        slot.classList.remove("digit-slot-active", "digit-slot-locked");
+        const el = document.getElementById(`slot${i}`);
+        if (!el) continue;
+        el.textContent = currentDigits[i];
+        el.classList.remove("digit-slot-active", "digit-slot-locked");
 
         if (i < 2) {
           if (i < lockedA) {
-            slot.classList.add("digit-slot-locked");
-          } else if (i === lockedA && lockedA < 2 && !gameOver && !phase2Unlocked) {
-            slot.classList.add("digit-slot-active");
+            el.classList.add("digit-slot-locked");
+          } else if (i === lockedA && !phase2Unlocked && !gameOver) {
+            el.classList.add("digit-slot-active");
           }
         } else {
           const bIdx = i - 2;
           if (bIdx < lockedB) {
-            slot.classList.add("digit-slot-locked");
-          } else if (bIdx === lockedB && lockedB < 2 && !gameOver && !phase2Unlocked) {
-            slot.classList.add("digit-slot-active");
+            el.classList.add("digit-slot-locked");
+          } else if (bIdx === lockedB && !phase2Unlocked && !gameOver) {
+            el.classList.add("digit-slot-active");
           }
         }
       }
@@ -661,35 +674,24 @@
       const progB = document.getElementById("progressB");
       if (progA) progA.textContent = `進度：${lockedA} / 2 鎖定`;
       if (progB) progB.textContent = `進度：${lockedB} / 2 鎖定`;
-    }
 
-    function renderPhase2Visuals() {
-      const canvas = document.getElementById("filterCanvas");
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      ctx.fillStyle = "#ff4d4d";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      for (let i = 0; i < 110; i++) {
-        ctx.fillStyle = i % 2 === 0 ? "rgba(255, 225, 0, 0.35)" : "rgba(37, 99, 235, 0.35)";
-        ctx.beginPath();
-        ctx.arc(
-          Math.random() * canvas.width,
-          Math.random() * canvas.height,
-          6 + Math.random() * 16,
-          0,
-          Math.PI * 2
-        );
-        ctx.fill();
-      }
-
-      ctx.fillStyle = "#991b1b";
-      ctx.font = "900 28px 'Noto Sans TC', sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(config.secretClue || "剪斷 1 號紅線", canvas.width / 2, canvas.height / 2);
+      // 同步更新 Web:Bit 板載 LED 矩陣顯示目前正在調整的數字
+      try {
+        if (boardMatrices.A) {
+          if (lockedA < 2) {
+            boardMatrices.A.showString(String(currentDigits[lockedA]));
+          } else {
+            boardMatrices.A.showString("OK");
+          }
+        }
+        if (boardMatrices.B) {
+          if (lockedB < 2) {
+            boardMatrices.B.showString(String(currentDigits[2 + lockedB]));
+          } else {
+            boardMatrices.B.showString("OK");
+          }
+        }
+      } catch (e) {}
     }
 
     function pressA(btn) {
@@ -699,14 +701,44 @@
       lastPressTimeA = now;
 
       if (btn === "A") {
-        if (lockedA >= 2) lockedA = 0;
+        if (lockedA >= 2) {
+          lockedA = 0;
+        }
         currentDigits[lockedA] = (currentDigits[lockedA] + 1) % 10;
         renderDigitSlots();
       } else if (btn === "B") {
         if (lockedA < 2) {
           lockedA += 1;
           renderDigitSlots();
-          checkAutoSubmitBothReady();
+          checkAutoVerify();
+        } else {
+          lockedA = 0;
+          renderDigitSlots();
+        }
+      }
+    }
+
+    function pressB(btn) {
+      if (gameOver || phase2Unlocked) return;
+      const now = Date.now();
+      if (now - lastPressTimeB < DEBOUNCE_MS) return;
+      lastPressTimeB = now;
+
+      if (btn === "A") {
+        if (lockedB >= 2) {
+          lockedB = 0;
+        }
+        const slotIdx = 2 + lockedB;
+        currentDigits[slotIdx] = (currentDigits[slotIdx] + 1) % 10;
+        renderDigitSlots();
+      } else if (btn === "B") {
+        if (lockedB < 2) {
+          lockedB += 1;
+          renderDigitSlots();
+          checkAutoVerify();
+        } else {
+          lockedB = 0;
+          renderDigitSlots();
         }
       }
     }
@@ -717,590 +749,586 @@
       renderDigitSlots();
     }
 
-    function pressB(btn) {
-      if (gameOver || phase2Unlocked) return;
-      const now = Date.now();
-      if (now - lastPressTimeB < DEBOUNCE_MS) return;
-      lastPressTimeB = now;
-
-      if (btn === "A") {
-        if (lockedB >= 2) lockedB = 0;
-        const idx = 2 + lockedB;
-        currentDigits[idx] = (currentDigits[idx] + 1) % 10;
-        renderDigitSlots();
-      } else if (btn === "B") {
-        if (lockedB < 2) {
-          lockedB += 1;
-          renderDigitSlots();
-          checkAutoSubmitBothReady();
-        }
-      }
-    }
-
     function resetPlayerB() {
       if (gameOver || phase2Unlocked) return;
       lockedB = 0;
       renderDigitSlots();
     }
 
-    function checkAutoSubmitBothReady() {
+    function checkAutoVerify() {
       if (lockedA === 2 && lockedB === 2) {
         setTimeout(() => {
-          if (lockedA === 2 && lockedB === 2 && !gameOver && !phase2Unlocked) {
+          if (!gameOver && !phase2Unlocked && lockedA === 2 && lockedB === 2) {
             checkFourDigitCode();
           }
         }, 250);
-      } else if (lockedA === 2 && lockedB < 2) {
-        document.getElementById("codeFeedback").innerHTML =
-          `✅ <strong>玩家 A</strong> 已鎖定前兩碼（<span class="font-mono text-sky-300">${currentDigits[0]}${currentDigits[1]}</span>），等待 <strong>玩家 B</strong> 鎖定後兩碼...`;
-      } else if (lockedB === 2 && lockedA < 2) {
-        document.getElementById("codeFeedback").innerHTML =
-          `✅ <strong>玩家 B</strong> 已鎖定後兩碼（<span class="font-mono text-rose-300">${currentDigits[2]}${currentDigits[3]}</span>），等待 <strong>玩家 A</strong> 鎖定前兩碼...`;
       }
     }
 
-    function evaluateGuess(guessStr, targetStr) {
-      let A = 0;
-      let B = 0;
-      const aMatchedItems = [];
-      const bMatchedDigits = [];
-      const targetUsed = [false, false, false, false];
+    function evaluateGuess(guessStr, secretStr) {
+      let aCount = 0;
+      let bCount = 0;
+      const matchedPositions = [];
+      const bDigits = [];
+      const secretUsed = [false, false, false, false];
       const guessUsed = [false, false, false, false];
 
       for (let i = 0; i < 4; i++) {
-        if (guessStr[i] === targetStr[i]) {
-          A++;
-          targetUsed[i] = true;
+        if (guessStr[i] === secretStr[i]) {
+          aCount++;
+          secretUsed[i] = true;
           guessUsed[i] = true;
-          aMatchedItems.push({ pos: i + 1, digit: guessStr[i] });
+          matchedPositions.push({ pos: i + 1, digit: guessStr[i] });
         }
       }
 
       for (let i = 0; i < 4; i++) {
         if (guessUsed[i]) continue;
         for (let j = 0; j < 4; j++) {
-          if (!targetUsed[j] && guessStr[i] === targetStr[j]) {
-            B++;
-            targetUsed[j] = true;
-            if (!bMatchedDigits.includes(guessStr[i])) {
-              bMatchedDigits.push(guessStr[i]);
-            }
+          if (!secretUsed[j] && guessStr[i] === secretStr[j]) {
+            bCount++;
+            secretUsed[j] = true;
+            bDigits.push(guessStr[i]);
             break;
           }
         }
       }
 
-      return { A, B, aMatchedItems, bMatchedDigits };
+      return { aCount, bCount, matchedPositions, bDigits };
     }
 
-    function buildClueBadgesHTML(evalResult, isLarge = false) {
-      const chips = [];
-      const sizeClass = isLarge ? "text-sm sm:text-base px-3 py-1" : "text-xs sm:text-sm px-2.5 py-0.5";
-
-      if (config.hintModeA !== "none") {
-        if (evalResult.aMatchedItems.length > 0) {
-          const textA = config.hintModeA === "pos_and_num"
-            ? evalResult.aMatchedItems.map(item => `第${item.pos}碼(${item.digit})`).join("、")
-            : evalResult.aMatchedItems.map(item => `第${item.pos}碼`).join("、");
-          chips.push(
-            `<span class="inline-block bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 rounded-lg font-extrabold ${sizeClass}">✅ A 正確：${textA}</span>`
-          );
-        } else {
-          chips.push(
-            `<span class="inline-block bg-slate-800 text-slate-400 border border-slate-700 rounded-lg font-semibold ${sizeClass}">A 正確：無</span>`
-          );
+    function buildHintSegments(evalRes) {
+      const segments = [];
+      if (evalRes.matchedPositions.length > 0 && config.hintModeA !== "none") {
+        if (config.hintModeA === "pos_and_num") {
+          const list = evalRes.matchedPositions.map((m) => `第${m.pos}碼(${m.digit})`).join("、");
+          segments.push(`<span class="text-emerald-400 font-bold">✅ A 命中：${list}</span>`);
+        } else if (config.hintModeA === "pos_only") {
+          const list = evalRes.matchedPositions.map((m) => `第${m.pos}碼`).join("、");
+          segments.push(`<span class="text-emerald-400 font-bold">✅ A 位置正確：${list}</span>`);
         }
       }
 
-      if (config.hintModeB === "show_digits") {
-        if (evalResult.bMatchedDigits.length > 0) {
-          chips.push(
-            `<span class="inline-block bg-amber-500/20 text-amber-300 border border-amber-500/50 rounded-lg font-extrabold ${sizeClass}">🔄 B 換位：${evalResult.bMatchedDigits.join("、")}</span>`
-          );
-        } else {
-          chips.push(
-            `<span class="inline-block bg-slate-800 text-slate-400 border border-slate-700 rounded-lg font-semibold ${sizeClass}">B 換位：無</span>`
-          );
-        }
+      if (evalRes.bDigits.length > 0 && config.hintModeB === "show_digits") {
+        const uniqueBDigits = [...new Set(evalRes.bDigits)];
+        segments.push(`<span class="text-amber-300 font-bold">🔄 B 換位數字：${uniqueBDigits.join("、")}</span>`);
       }
 
-      return chips.join(" ");
+      return segments;
+    }
+
+    function checkFourDigitCode() {
+      if (gameOver || phase2Unlocked) return;
+      const guess = currentDigits.join("");
+      const evalRes = evaluateGuess(guess, secretCode);
+      const hintSegments = buildHintSegments(evalRes);
+
+      guessHistory.unshift({
+        attempt: guessHistory.length + 1,
+        guess,
+        aCount: evalRes.aCount,
+        bCount: evalRes.bCount,
+        hintHtml: hintSegments.join(" ｜ ")
+      });
+      renderGuessHistory();
+
+      if (evalRes.aCount === 4) {
+        phase2Unlocked = true;
+        colorScanArmed = true;
+        phase2GraceUntil = Date.now() + 2000;
+        holdingColor = null;
+        holdStartTime = 0;
+        renderDigitSlots();
+        applyConfigToUI();
+
+        document.getElementById("codeFeedback").innerHTML =
+          `🎉 <strong>4A0B 密碼完全正確（${guess}）！</strong>第一階段已解除，請立即進入<strong>第二階段</strong>透過濾色片找出正確電線並對準鏡頭（或點擊）拆線！`;
+        const unlockBadge = document.getElementById("phase2LockBadge");
+        unlockBadge.textContent = "🔓 已解鎖！請透過濾色片找出正確電線";
+        unlockBadge.className =
+          "text-xs font-bold px-3 py-1 rounded-full bg-emerald-500 text-slate-950 border border-emerald-300";
+
+        if (config.wireMode === "camera" && !camStream) {
+          startCamera();
+        }
+        return;
+      }
+
+      remainingTime = Math.max(0, remainingTime - config.penalty);
+      document.getElementById("timerDisplay").textContent = remainingTime;
+      lockedA = 0;
+      lockedB = 0;
+      renderDigitSlots();
+
+      const hintDetailHtml = hintSegments.length > 0
+        ? `<div class="mt-1.5 text-sm sm:text-base">${hintSegments.join("　｜　")}</div>`
+        : "";
+
+      document.getElementById("codeFeedback").innerHTML =
+        `❌ 密碼 <strong>${guess}</strong> 錯誤（扣除 ${config.penalty} 秒）｜比對結果：<span class="text-lg font-black text-white bg-indigo-600/80 px-2.5 py-0.5 rounded-lg">${evalRes.aCount}A ${evalRes.bCount}B</span>（雙方已自動解鎖，可重新調整數字）${hintDetailHtml}`;
+
+      if (remainingTime <= 0) {
+        triggerExplosion("猜錯密碼扣除時間後，剩餘秒數歸零，炸彈引爆！");
+      }
     }
 
     function renderGuessHistory() {
       const container = document.getElementById("guessHistoryList");
-      document.getElementById("guessCountBadge").textContent = `共 ${guessHistory.length} 次嘗試`;
+      const badge = document.getElementById("guessCountBadge");
+      badge.textContent = `共 ${guessHistory.length} 次嘗試`;
 
       if (guessHistory.length === 0) {
         container.innerHTML = `<div class="text-slate-400 italic col-span-full py-2 text-base">尚無猜測紀錄，雙方完成鎖定並比對後將顯示於此...</div>`;
         return;
       }
 
-      container.innerHTML = guessHistory.map((item, idx) => {
-        const isWin = item.A === 4;
-        const badgeStyle = isWin
-          ? "bg-emerald-500/25 text-emerald-300 border-emerald-400"
-          : "bg-amber-500/25 text-amber-300 border-amber-400";
-        const clueRow = buildClueBadgesHTML(item, true);
-
-        return `
-          <div class="bg-slate-900 border-2 ${isWin ? 'border-emerald-500/60' : 'border-slate-800'} px-4 py-3.5 rounded-2xl shadow-md space-y-2">
-            <div class="flex items-center justify-between gap-2">
-              <div class="flex items-center gap-3">
-                <span class="text-sm sm:text-base text-slate-400 font-mono font-bold bg-slate-800 px-2.5 py-0.5 rounded-lg">#${idx + 1}</span>
-                <span class="font-mono font-black text-2xl sm:text-3xl tracking-[0.2em] text-white">${item.guess}</span>
+      container.innerHTML = guessHistory
+        .map((item) => {
+          const isWin = item.aCount === 4;
+          const badgeClass = isWin
+            ? "bg-emerald-500 text-slate-950"
+            : item.aCount > 0 || item.bCount > 0
+            ? "bg-amber-400 text-slate-950"
+            : "bg-slate-700 text-slate-200";
+          return `
+            <div class="bg-slate-900 border-2 ${isWin ? "border-emerald-500/70" : "border-slate-800"} rounded-xl px-4 py-3 flex flex-col gap-1.5 shadow">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-3">
+                  <span class="text-slate-400 font-mono text-sm font-bold">#${item.attempt}</span>
+                  <span class="font-mono font-black text-2xl sm:text-3xl tracking-widest text-white">${item.guess}</span>
+                </div>
+                <span class="text-base sm:text-lg font-black px-3 py-1 rounded-lg ${badgeClass}">${item.aCount}A ${item.bCount}B</span>
               </div>
-              <span class="font-mono font-black text-lg sm:text-xl px-3.5 py-1 rounded-xl border-2 ${badgeStyle}">
-                ${item.A}A${item.B}B
-              </span>
+              ${item.hintHtml ? `<div class="text-sm sm:text-base border-t border-slate-800 pt-1.5">${item.hintHtml}</div>` : ""}
             </div>
-            ${clueRow ? `<div class="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/90">${clueRow}</div>` : ""}
-          </div>
-        `;
-      }).join("");
+          `;
+        })
+        .join("");
     }
 
-    function checkFourDigitCode() {
-      if (gameOver || phase2Unlocked) return;
-      if (lockedA < 2 || lockedB < 2) {
-        document.getElementById("codeFeedback").textContent =
-          `尚未完成 4 位數確認（玩家 A：${lockedA}/2、玩家 B：${lockedB}/2）！請雙方都按 B 鍵鎖定後再比對。`;
-        return;
+    // 繪製濾色片視覺干擾圖案
+    function renderPhase2Visuals() {
+      const canvas = document.getElementById("filterCanvas");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width;
+      const h = canvas.height;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+
+      // 判斷濾色片主色系（預設紅色濾色片 -> 隱藏文字用青藍色，干擾線條用紅/橘/黃）
+      const isBlueFilter = config.filterText.includes("藍");
+      const isGreenFilter = config.filterText.includes("綠");
+
+      const hiddenColor = isBlueFilter ? "#ea580c" : isGreenFilter ? "#db2777" : "#0284c7";
+      const noiseColors = isBlueFilter
+        ? ["#2563eb", "#3b82f6", "#60a5fa", "#1d4ed8"]
+        : isGreenFilter
+        ? ["#16a34a", "#22c55e", "#4ade80", "#15803d"]
+        : ["#ef4444", "#f97316", "#f59e0b", "#dc2626"];
+
+      // 先畫出隱藏線索文字
+      ctx.save();
+      ctx.font = "900 32px 'Noto Sans TC', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = hiddenColor;
+      ctx.fillText(config.secretClue || "剪斷 1 號紅線", w / 2, h / 2);
+      ctx.restore();
+
+      // 疊加高密度彩色干擾線條與圓點（肉眼直接看會被干擾，戴上對應濾色片後干擾色會變淡/消失）
+      for (let i = 0; i < 65; i++) {
+        ctx.strokeStyle = noiseColors[i % noiseColors.length];
+        ctx.lineWidth = 2.5 + (i % 3);
+        ctx.beginPath();
+        ctx.moveTo((i * 37) % w, (i * 19) % h);
+        ctx.lineTo(((i * 73) + 90) % w, ((i * 53) + 40) % h);
+        ctx.stroke();
       }
 
-      const guess = currentDigits.join("");
-      const evalResult = evaluateGuess(guess, secretCode);
-      guessHistory.push({ guess, ...evalResult });
-      renderGuessHistory();
-
-      if (evalResult.A === 4) {
-        phase2Unlocked = true;
-        holdingColor = null;
-        holdStartTime = 0;
-        colorScanArmed = false;
-        phase2GraceUntil = performance.now() + 2500;
-        updateHoldProgressUI(null, 0);
-        updateScanButtonUI();
-
-        document.getElementById("codeFeedback").innerHTML =
-          `✅ 密碼 <strong class="text-emerald-400 font-mono text-xl">${guess}</strong> 完全正確（<span class="text-emerald-300 font-bold">4A0B</span>）！外殼已解鎖，請先戴上濾色片看線索，準備好再按下「開始顏色判讀」！`;
-        document.getElementById("gameStatusBanner").textContent =
-          "密碼已破解！請先戴上濾色片確認電線顏色，準備好對準鏡頭時再啟動顏色判讀！";
-        const unlockBadge = document.getElementById("phase2LockBadge");
-        unlockBadge.textContent = "🔓 已解鎖！請先戴濾色片看題目，再按下方「開始顏色判讀」";
-        unlockBadge.className = "text-xs font-bold px-3 py-1 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-400";
-
-        const targetBadge = document.getElementById("targetWireHintBadge");
-        if (targetBadge) targetBadge.textContent = "⏸️ 預覽中：按下「開始顏色判讀」後才捕捉";
-      } else {
-        remainingTime = Math.max(0, remainingTime - config.penalty);
-        document.getElementById("timerDisplay").textContent = remainingTime;
-
-        const clueHTML = buildClueBadgesHTML(evalResult, true);
-        lockedA = 0;
-        lockedB = 0;
-        renderDigitSlots();
-
-        document.getElementById("codeFeedback").innerHTML = `
-          <div class="flex flex-wrap items-center gap-2">
-            <span>❌ 猜測 <strong class="font-mono text-white text-xl">${guess}</strong> 錯誤（扣 ${config.penalty} 秒）➔ 比對結果：</span>
-            <span class="font-mono font-black text-xl px-3 py-0.5 rounded-lg bg-amber-400 text-slate-950">${evalResult.A}A${evalResult.B}B</span>
-          </div>
-          ${clueHTML ? `<div class="mt-2.5 flex flex-wrap items-center gap-2">${clueHTML}</div>` : ""}
-          <div class="mt-2 text-xs sm:text-sm text-slate-400">雙方進度已重設，可直接按 A 鍵微調數字後再按 B 鍵鎖定！</div>
-        `;
-
-        if (remainingTime <= 0) {
-          triggerExplosion("時間耗盡，定時炸彈已引爆！");
-        }
+      for (let i = 0; i < 90; i++) {
+        ctx.fillStyle = noiseColors[(i + 1) % noiseColors.length];
+        ctx.beginPath();
+        ctx.arc((i * 43) % w, (i * 29) % h, 3 + (i % 4), 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
     function handleWireClick(color) {
       if (gameOver) return;
       if (!phase2Unlocked) {
-        showResultModal("🔒", "外殼尚未解鎖", "請先完成第一階段 4 位數密碼破解（達到 4A0B），才能剪斷電線！");
+        showResultModal(
+          "🔒",
+          "第二階段尚未解鎖",
+          "必須先破解第一階段的 4 位數密碼，才能打開拆線保護蓋！",
+          "border-amber-400"
+        );
         return;
       }
-      document.getElementById(`wire-${color}`).classList.add("wire-cut");
+      cutWire(color, "手動點擊剪斷");
+    }
+
+    function cutWire(color, sourceText) {
+      if (gameOver) return;
+      const wireEl = document.getElementById(`wire-${color}`);
+      if (wireEl) wireEl.classList.add("wire-cut");
+
       if (color === config.correctWire) {
-        triggerDefuseSuccess(`已成功剪斷正確電線（${WIRE_LABELS[color]}）！`);
+        triggerDefuseSuccess(color, sourceText);
       } else {
-        triggerExplosion(`剪錯線了！你剪斷的是「${WIRE_LABELS[color]}」，炸彈隨即引爆！`);
+        triggerExplosion(`剪錯電線（${WIRE_LABELS[color]}）！正確答案是【${WIRE_LABELS[config.correctWire]}】。`);
       }
     }
 
-    function triggerDefuseSuccess(detailMsg = "") {
+    function triggerDefuseSuccess(color, sourceText) {
       gameOver = true;
       clearInterval(timerId);
-      stopCamera();
+      colorScanArmed = false;
 
       const banner = document.getElementById("alertBanner");
-      banner.className = "bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 text-white rounded-2xl p-4 sm:p-5 text-center shadow-xl border-2 border-emerald-200 transition-all";
-      document.getElementById("alertCodeBadge").textContent = "✅ BOMB DEFUSED // TIMER STOPPED";
+      banner.className =
+        "bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500 text-slate-950 rounded-2xl p-4 sm:p-5 text-center shadow-xl border-2 border-emerald-200 transition-all";
+      document.getElementById("alertCodeBadge").textContent = "✅ BOMB DEFUSED";
       document.getElementById("alertHeadline").textContent = "MISSION CLEAR";
-      document.getElementById("missionSubtitle").textContent = "計時已暫停！剩餘";
+      document.getElementById("gameStatusBanner").textContent =
+        `🎉 拆彈成功！計時器已於剩餘 ${remainingTime} 秒時安全停止！`;
 
-      const msg = `${detailMsg} 成功解除摩天大樓危機，計時器凍結於剩餘 ${remainingTime} 秒！`;
-      document.getElementById("gameStatusBanner").textContent = `🎉 ${msg}`;
-      showResultModal("🎉", "拆彈成功！計時器已暫停", msg);
+      if (boardMatrices.A) {
+        try { boardMatrices.A.showString("WIN"); } catch (e) {}
+      }
+      if (boardMatrices.B) {
+        try { boardMatrices.B.showString("WIN"); } catch (e) {}
+      }
+
+      showResultModal(
+        "🎉",
+        "拆彈成功！摩天大樓危機解除",
+        `兩位偵探成功剪斷正確的【${WIRE_LABELS[color]}】（方式：${sourceText}），定時炸彈在剩餘 ${remainingTime} 秒時成功停止！`,
+        "border-emerald-400"
+      );
     }
 
-    function triggerExplosion(reason) {
+    function triggerExplosion(reasonText) {
       gameOver = true;
       clearInterval(timerId);
-      stopCamera();
+      colorScanArmed = false;
 
       const banner = document.getElementById("alertBanner");
-      banner.className = "bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white rounded-2xl p-4 sm:p-5 text-center shadow-xl border-2 border-red-300 danger-pulse transition-all";
-      document.getElementById("alertCodeBadge").textContent = "💥 DETONATED";
-      document.getElementById("alertHeadline").textContent = "GAME OVER";
+      banner.className =
+        "bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white rounded-2xl p-4 sm:p-5 text-center shadow-xl border-2 border-red-300 danger-pulse transition-all";
+      document.getElementById("alertCodeBadge").textContent = "💥 DETONATION";
+      document.getElementById("alertHeadline").textContent = "BOOM!!";
+      document.getElementById("gameStatusBanner").textContent = `💥 任務失敗：${reasonText}`;
 
-      document.getElementById("gameStatusBanner").textContent = `💥 ${reason}`;
-      showResultModal("💥", "任務失敗・炸彈引爆", reason);
-    }
-
-    function showResultModal(icon, title, desc) {
-      document.getElementById("resultModalIcon").textContent = icon;
-      document.getElementById("resultModalTitle").textContent = title;
-      document.getElementById("resultModalDesc").textContent = desc;
-      const modal = document.getElementById("resultModal");
-      modal.classList.remove("hidden");
-      modal.classList.add("flex");
-    }
-
-    function closeResultModal() {
-      const modal = document.getElementById("resultModal");
-      modal.classList.add("hidden");
-      modal.classList.remove("flex");
-    }
-
-    function updateHoldProgressUI(color, percent) {
-      const bar = document.getElementById("camHoldBar");
-      const label = document.getElementById("camHoldLabel");
-      const pctText = document.getElementById("camHoldPercent");
-      if (!bar || !label || !pctText) return;
-
-      const clamped = Math.min(100, Math.max(0, Math.round(percent)));
-      bar.style.width = `${clamped}%`;
-      pctText.textContent = `${clamped}%`;
-
-      if (!color || clamped === 0) {
-        label.textContent = "穩定判讀進度：尚未偵測到色卡";
-        bar.className = "h-full bg-emerald-400 transition-all duration-75";
-      } else {
-        label.textContent = `正在判讀：${WIRE_LABELS[color]}（請保持對準白框）`;
-        bar.className = color === config.correctWire
-          ? "h-full bg-emerald-400 transition-all duration-75"
-          : "h-full bg-rose-500 transition-all duration-75";
+      if (boardMatrices.A) {
+        try { boardMatrices.A.showString("XX"); } catch (e) {}
       }
+      if (boardMatrices.B) {
+        try { boardMatrices.B.showString("XX"); } catch (e) {}
+      }
+
+      showResultModal(
+        "💥",
+        "任務失敗！炸彈已引爆",
+        `${reasonText} 本局密碼為【${secretCode}】，請點擊「重新開始」再次挑戰！`,
+        "border-red-500"
+      );
     }
 
-    function updateScanButtonUI() {
-      const btn = document.getElementById("toggleScanBtn");
-      const targetBadge = document.getElementById("targetWireHintBadge");
-      if (!btn) return;
-      if (!phase2Unlocked) {
-        btn.textContent = "🔒 判讀狀態：需先解鎖密碼";
-        btn.className = "px-3.5 py-1.5 rounded-lg bg-slate-700 text-slate-300 text-xs font-extrabold transition";
-      } else if (colorScanArmed) {
-        btn.textContent = "🔴 顏色判讀中（點擊暫停）";
-        btn.className = "px-3.5 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-white text-xs font-extrabold transition animate-pulse";
-        if (targetBadge) targetBadge.textContent = "📷 正式判讀中：請將電線對準白框";
-      } else {
-        btn.textContent = "▶️ 開始顏色判讀（已準備好線卡）";
-        btn.className = "px-3.5 py-1.5 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-slate-950 text-xs font-extrabold transition shadow";
-        if (targetBadge) targetBadge.textContent = "⏸️ 待命中：準備好線卡後請按「開始顏色判讀」";
+    // ================= 鏡頭色彩辨識邏輯 =================
+    async function startCamera(e) {
+      if (e) e.preventDefault();
+      try {
+        if (camStream) {
+          camStream.getTracks().forEach((t) => t.stop());
+        }
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+        const video = document.getElementById("camVideo");
+        video.srcObject = camStream;
+        await video.play();
+        document.getElementById("camDetectReadout").textContent = "📷 鏡頭已啟動！請將色卡對準中央白框（可點擊校準按鈕微調環境光線）";
+        if (!camLoopId) {
+          camLoopId = requestAnimationFrame(processCameraFrame);
+        }
+      } catch (err) {
+        document.getElementById("camDetectReadout").textContent = `❌ 無法開啟鏡頭（${err.message}），可直接點擊上方色線拆彈`;
       }
     }
 
     function toggleColorScan(e) {
       if (e) e.preventDefault();
       if (!phase2Unlocked) {
-        showResultModal("🔒", "尚未解鎖第二階段", "請先完成第一階段 4 位數密碼破解（4A0B），才能開啟拆線顏色判讀！");
+        showResultModal("🔒", "尚未解鎖第二階段", "請先完成第一階段 4 位數密碼破解，鏡頭色卡自動拆彈才會啟動！", "border-amber-400");
         return;
       }
       colorScanArmed = !colorScanArmed;
       holdingColor = null;
       holdStartTime = 0;
       updateHoldProgressUI(null, 0);
-      updateScanButtonUI();
+      applyConfigToUI();
     }
 
-    async function startCamera(e) {
-      if (e) e.preventDefault();
-      try {
-        stopCamera();
-        camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
-        const video = document.getElementById("camVideo");
-        video.srcObject = camStream;
-        await video.play().catch(() => {});
-        document.getElementById("camDetectReadout").textContent = "鏡頭已啟動（預覽模式，不會自動引爆，準備好請按「開始顏色判讀」）";
+    function classifyColor(r, g, b) {
+      // 過濾太暗或太白（無明顯色彩飽和度）的背景
+      const maxC = Math.max(r, g, b);
+      const minC = Math.min(r, g, b);
+      const sat = maxC === 0 ? 0 : (maxC - minC) / maxC;
+      if (maxC < 65 || sat < 0.28) return null;
 
-        const sCanvas = document.getElementById("sampleCanvas");
-        const sCtx = sCanvas.getContext("2d", { willReadFrequently: true });
-
-        const detect = () => {
-          if (gameOver || !camStream) return;
-          if (video.readyState === video.HAVE_ENOUGH_DATA) {
-            const sx = Math.max(0, (video.videoWidth - 44) / 2);
-            const sy = Math.max(0, (video.videoHeight - 44) / 2);
-            sCtx.drawImage(video, sx, sy, 44, 44, 0, 0, 44, 44);
-            const data = sCtx.getImageData(0, 0, 44, 44).data;
-            let r = 0, g = 0, b = 0, count = data.length / 4;
-            for (let i = 0; i < data.length; i += 4) {
-              r += data[i]; g += data[i + 1]; b += data[i + 2];
-            }
-            r = Math.round(r / count);
-            g = Math.round(g / count);
-            b = Math.round(b / count);
-            lastSampleRgb = { r, g, b };
-
-            const matched = matchColorProfile(r, g, b);
-            const modeText = (phase2Unlocked && colorScanArmed) ? "【正式判讀中】" : "【預覽觀察中】";
-            document.getElementById("camDetectReadout").textContent =
-              `${modeText} 框內 RGB(${r}, ${g}, ${b}) ｜ 識別：${matched ? WIRE_LABELS[matched] : "未符合三原色卡"}`;
-
-            if (phase2Unlocked && colorScanArmed && performance.now() >= phase2GraceUntil && matched) {
-              if (holdingColor !== matched) {
-                holdingColor = matched;
-                holdStartTime = performance.now();
-              }
-              const elapsed = performance.now() - holdStartTime;
-              const pct = (elapsed / HOLD_REQUIRED_MS) * 100;
-              updateHoldProgressUI(matched, pct);
-
-              if (elapsed >= HOLD_REQUIRED_MS) {
-                document.getElementById(`wire-${matched}`).classList.add("cut");
-                if (matched === config.correctWire) {
-                  triggerDefuseSuccess(`鏡頭已確認「${WIRE_LABELS[matched]}」正確無誤！`);
-                } else {
-                  triggerExplosion(`鏡頭判讀為錯誤的「${WIRE_LABELS[matched]}」，炸彈引爆！`);
-                }
-                return;
-              }
-            } else {
-              holdingColor = null;
-              holdStartTime = 0;
-              updateHoldProgressUI(null, 0);
-            }
-          }
-          camLoopId = requestAnimationFrame(detect);
-        };
-        camLoopId = requestAnimationFrame(detect);
-      } catch (err) {
-        document.getElementById("camDetectReadout").textContent =
-          "無法開啟鏡頭（請確認 HTTPS / 瀏覽器鏡頭權限，或改用直接點擊電線模式）。";
-      }
-    }
-
-    function stopCamera() {
-      if (camLoopId) cancelAnimationFrame(camLoopId);
-      if (camStream) {
-        camStream.getTracks().forEach(t => t.stop());
-        camStream = null;
-      }
-    }
-
-    function matchColorProfile(r, g, b) {
       let bestColor = null;
-      let bestDist = 72;
-      for (const [colorName, prof] of Object.entries(config.rgbProfiles)) {
+      let bestDist = Infinity;
+      for (const [cName, prof] of Object.entries(config.rgbProfiles)) {
         const dist = Math.hypot(r - prof.r, g - prof.g, b - prof.b);
         if (dist < bestDist) {
           bestDist = dist;
-          bestColor = colorName;
+          bestColor = cName;
         }
       }
-      return bestColor;
+      return bestDist < 125 ? bestColor : null;
     }
 
-    function calibrateColor(targetColor) {
+    function calibrateColor(color) {
       if (!camStream) {
-        showResultModal("📷", "請先啟動鏡頭", "請先點擊「▶️ 啟動鏡頭」，將對應顏色的實體電線對準白框後再按校準！");
+        showResultModal("📷", "請先啟動鏡頭", "請先點擊「▶️ 啟動鏡頭」並將該顏色色卡對準中央白框後再按校準！", "border-sky-400");
         return;
       }
-      config.rgbProfiles[targetColor] = { ...lastSampleRgb };
+      config.rgbProfiles[color] = { ...lastSampleRgb };
       saveConfigToStorage();
-      showResultModal(
-        "🎯",
-        `已校準「${WIRE_LABELS[targetColor]}」顏色`,
-        `已將目前白框內的 RGB(${lastSampleRgb.r}, ${lastSampleRgb.g}, ${lastSampleRgb.b}) 儲存為「${WIRE_LABELS[targetColor]}」的現場燈光基準色！`
-      );
+      document.getElementById("camDetectReadout").textContent =
+        `✅ 已校準【${WIRE_LABELS[color]}】為 RGB(${lastSampleRgb.r}, ${lastSampleRgb.g}, ${lastSampleRgb.b})`;
     }
 
-    function setBoardBadgeState(player, state, text) {
-      const badge = document.getElementById(player === "A" ? "statusA" : "statusB");
-      if (!badge) return;
-      badge.textContent = text;
+    function updateHoldProgressUI(color, ratio) {
+      const pct = Math.min(100, Math.round(ratio * 100));
+      const bar = document.getElementById("camHoldBar");
+      const pctEl = document.getElementById("camHoldPercent");
+      const labelEl = document.getElementById("camHoldLabel");
+      const reticle = document.getElementById("camReticle");
+
+      if (bar) bar.style.width = `${pct}%`;
+      if (pctEl) pctEl.textContent = `${pct}%`;
+
+      if (!color) {
+        if (labelEl) labelEl.textContent = "穩定判讀進度：尚未偵測到色卡";
+        if (reticle) reticle.style.borderColor = "#ffffff";
+        return;
+      }
+
+      const colorHex = color === "red" ? "#ef4444" : color === "blue" ? "#3b82f6" : "#facc15";
+      if (reticle) reticle.style.borderColor = colorHex;
+      if (labelEl) {
+        labelEl.textContent = `偵測到【${WIRE_LABELS[color]}】穩定鎖定中... (${pct}%)`;
+      }
+    }
+
+    function processCameraFrame() {
+      const video = document.getElementById("camVideo");
+      const canvas = document.getElementById("sampleCanvas");
+      if (video && canvas && video.readyState >= 2) {
+        const ctx = canvas.getContext("2d");
+        const vw = video.videoWidth || 320;
+        const vh = video.videoHeight || 240;
+        const sampleSize = 44;
+        const sx = Math.max(0, Math.floor(vw / 2 - sampleSize / 2));
+        const sy = Math.max(0, Math.floor(vh / 2 - sampleSize / 2));
+
+        ctx.drawImage(video, sx, sy, sampleSize, sampleSize, 0, 0, sampleSize, sampleSize);
+        const imgData = ctx.getImageData(0, 0, sampleSize, sampleSize).data;
+
+        let sumR = 0, sumG = 0, sumB = 0;
+        const pixelCount = sampleSize * sampleSize;
+        for (let i = 0; i < imgData.length; i += 4) {
+          sumR += imgData[i];
+          sumG += imgData[i + 1];
+          sumB += imgData[i + 2];
+        }
+        const avgR = Math.round(sumR / pixelCount);
+        const avgG = Math.round(sumG / pixelCount);
+        const avgB = Math.round(sumB / pixelCount);
+        lastSampleRgb = { r: avgR, g: avgG, b: avgB };
+
+        const detected = classifyColor(avgR, avgG, avgB);
+        const readout = document.getElementById("camDetectReadout");
+        if (readout) {
+          readout.textContent = `即時採樣 RGB(${avgR}, ${avgG}, ${avgB}) ｜ 辨識結果：${detected ? WIRE_LABELS[detected] : "無明顯色卡"}`;
+        }
+
+        if (phase2Unlocked && colorScanArmed && !gameOver && Date.now() >= phase2GraceUntil) {
+          if (detected) {
+            if (holdingColor !== detected) {
+              holdingColor = detected;
+              holdStartTime = Date.now();
+            }
+            const elapsed = Date.now() - holdStartTime;
+            const ratio = elapsed / HOLD_REQUIRED_MS;
+            updateHoldProgressUI(detected, ratio);
+
+            if (elapsed >= HOLD_REQUIRED_MS) {
+              holdingColor = null;
+              holdStartTime = 0;
+              updateHoldProgressUI(null, 0);
+              cutWire(detected, "鏡頭色卡自動判讀");
+            }
+          } else {
+            holdingColor = null;
+            holdStartTime = 0;
+            updateHoldProgressUI(null, 0);
+          }
+        }
+      }
+      camLoopId = requestAnimationFrame(processCameraFrame);
+    }
+
+    // ================= Web:Bit 雙板 Wi-Fi 連線邏輯 =================
+    function updateBoardStatus(player, state, text) {
+      const el = document.getElementById(`status${player}`);
+      if (!el) return;
+      el.textContent = text;
       if (state === "connected") {
-        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-600 text-white shadow";
+        el.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-600 text-white shadow";
       } else if (state === "connecting") {
-        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-amber-500 text-slate-950 animate-pulse";
+        el.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-amber-500 text-slate-950 animate-pulse";
       } else {
-        badge.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-slate-700 text-slate-200";
+        el.className = "text-xs font-bold px-2.5 py-1 rounded-full bg-slate-700 text-slate-200";
       }
     }
 
-    function bindWebBitButtons(board, handlerFn, playerLabel = "") {
-      const monitor = document.getElementById("hwSignalMonitor");
-      let lastHwTrigger = 0;
-
-      const triggerOnce = (key, sourceInfo = "") => {
-        const now = Date.now();
-        if (now - lastHwTrigger < 160) return; // 防止多通道同時觸發連跳兩碼
-        lastHwTrigger = now;
-
-        if (monitor) {
-          monitor.innerHTML = `<span class="text-emerald-400 font-bold">✅ 收到 [${playerLabel}] 實體「${key} 鍵」訊號！(${sourceInfo} @ ${new Date().toLocaleTimeString()})</span><span class="text-slate-400">數字已自動 +1 / 確認</span>`;
-        }
-        handlerFn(key);
-      };
-
-      // 【最穩定核心方案】直接透過數位腳位監聽 Pin 35 (A鍵) 與 Pin 27 (B鍵) 電位變化
-      // Web:Bit 硬體按鍵平時為高電位 (1)，按下瞬間變為低電位 (0)
-      try {
-        const pinA = board.getDigitalPin(35);
-        const pinB = board.getDigitalPin(27);
-        let prevValA = 1;
-        let prevValB = 1;
-
-        if (pinA && typeof pinA.read === "function") {
-          pinA.read((val) => {
-            if (prevValA === 1 && val === 0) {
-              triggerOnce("A", "Pin35 數位電位");
-            }
-            prevValA = val;
-          });
-        }
-
-        if (pinB && typeof pinB.read === "function") {
-          pinB.read((val) => {
-            if (prevValB === 1 && val === 0) {
-              triggerOnce("B", "Pin27 數位電位");
-            }
-            prevValB = val;
-          });
-        }
-      } catch (e) {}
-
-      // 【備援通道】同時掛載標準 getButton(board, 35/27) 與 bitGPIO
-      try {
-        if (typeof getButton === "function") {
-          const btnA = getButton(board, 35);
-          const btnB = getButton(board, 27);
-          if (btnA && typeof btnA.on === "function") btnA.on("pressed", () => triggerOnce("A", "getButton35"));
-          if (btnB && typeof btnB.on === "function") btnB.on("pressed", () => triggerOnce("B", "getButton27"));
-        }
-      } catch (e) {}
-
-      // 連線完成時讓 Web:Bit 矩陣燈閃一下綠色提示已就緒
-      try {
-        const gpio = (typeof bitGPIO === "function") ? bitGPIO(board) : board;
-        if (typeof getMatrix === "function") {
-          const matrix = getMatrix(gpio, 4, 25);
-          if (matrix && typeof matrix.setColor === "function") {
-            matrix.setColor("#00ff66");
-            setTimeout(() => matrix.off && matrix.off(), 600);
-          }
-        }
-      } catch (e) {}
-    }
-
-    function ensureWebduinoSdkLoaded() {
-      return new Promise((resolve) => {
-        if (typeof boardReady === "function" || (window.webduino && window.webduino.board)) {
-          resolve(true);
-          return;
-        }
-        const fallbackUrls = [
-          "https://webbit.webduino.io/blockly/dist/lib/webduino-all-0.4.20.min.js",
-          "https://webduino.io/components/webduino-js/dist/webduino-all.min.js"
-        ];
-        let idx = 0;
-        const tryNext = () => {
-          if (typeof boardReady === "function" || (window.webduino && window.webduino.board)) {
-            resolve(true);
-            return;
-          }
-          if (idx >= fallbackUrls.length) {
-            resolve(false);
-            return;
-          }
-          const s = document.createElement("script");
-          s.src = fallbackUrls[idx++];
-          s.onload = () => setTimeout(tryNext, 200);
-          s.onerror = () => tryNext();
-          document.head.appendChild(s);
-        };
-        tryNext();
-      });
-    }
-
-    async function connectSingleBoard(player, deviceId, handlerFn) {
-      if (!deviceId) {
-        setBoardBadgeState(player, "idle", "🔴 未設定 ID");
-        return;
+    function quickConnectPlayer(player) {
+      const inputEl = document.getElementById(`quickDevice${player}`);
+      if (!inputEl) return;
+      const devId = inputEl.value.trim();
+      if (player === "A") {
+        config.deviceA = devId;
+      } else {
+        config.deviceB = devId;
       }
-
-      setBoardBadgeState(player, "connecting", "🟡 載入 SDK 中...");
-      const sdkReady = await ensureWebduinoSdkLoaded();
-
-      if (!sdkReady) {
-        setBoardBadgeState(player, "idle", "🔴 SDK 載入失敗（請檢查網路）");
-        return;
-      }
-
-      setBoardBadgeState(player, "connecting", `🟡 Wi-Fi 連線中 (${deviceId})`);
-
-      const timeoutHandle = setTimeout(() => {
-        const badge = document.getElementById(player === "A" ? "statusA" : "statusB");
-        if (badge && badge.textContent.includes("連線中")) {
-          setBoardBadgeState(player, "idle", `🔴 連線逾時 (${deviceId})`);
-        }
-      }, 15000);
-
-      try {
-        if (typeof boardReady === "function") {
-          boardReady({ board: "Bit", device: deviceId, transport: "mqtt", multi: true }, (board) => {
-            clearTimeout(timeoutHandle);
-            board.samplingInterval = 50;
-            setBoardBadgeState(player, "connected", `🟢 已連線 (${deviceId})`);
-            bindWebBitButtons(board, handlerFn, `玩家 ${player}`);
-          });
-        } else if (window.webduino && window.webduino.board && window.webduino.board.Bit) {
-          const board = new window.webduino.board.Bit({ device: deviceId, transport: "mqtt" });
-          board.on("ready", () => {
-            clearTimeout(timeoutHandle);
-            board.samplingInterval = 50;
-            setBoardBadgeState(player, "connected", `🟢 已連線 (${deviceId})`);
-            bindWebBitButtons(board, handlerFn, `玩家 ${player}`);
-          });
-        } else {
-          clearTimeout(timeoutHandle);
-          setBoardBadgeState(player, "idle", "🔴 找不到 Web:Bit 驅動");
-        }
-      } catch (err) {
-        clearTimeout(timeoutHandle);
-        setBoardBadgeState(player, "idle", `🔴 連線異常`);
-      }
-    }
-
-    function connectWebduinoBoards() {
-      connectSingleBoard("A", config.deviceA, pressA);
-      connectSingleBoard("B", config.deviceB, pressB);
+      saveConfigToStorage();
+      connectSingleBoard(player, devId);
     }
 
     function reconnectBoardsManual() {
-      if (!config.deviceA && !config.deviceB) {
-        showResultModal(
-          "📡",
-          "尚未輸入開發板 Device ID",
-          "請先點擊右上角「⚙️ 關卡設定後台」，分別填入玩家 A 與玩家 B 的 Web:Bit Device ID 並儲存，即可透過 Wi-Fi 連線！"
-        );
+      connectSingleBoard("A", (config.deviceA || "").trim());
+      connectSingleBoard("B", (config.deviceB || "").trim());
+    }
+
+    function connectSingleBoard(player, deviceId) {
+      connectTokens[player] += 1;
+      const myToken = connectTokens[player];
+      boardInstances[player] = null;
+      boardMatrices[player] = null;
+
+      if (!deviceId) {
+        updateBoardStatus(player, "idle", "🔴 未設定 ID");
         return;
       }
-      connectWebduinoBoards();
+
+      if (typeof boardReady !== "function") {
+        updateBoardStatus(player, "idle", "⚠️ 函式庫未載入");
+        return;
+      }
+
+      updateBoardStatus(player, "connecting", `🟡 連線中 (${deviceId})...`);
+
+      try {
+        boardReady({ board: "Bit", device: deviceId, transport: "mqtt" }, function (board) {
+          if (connectTokens[player] !== myToken) return;
+          // 採用與成功範例一致的 250ms 取樣頻率，避免 MQTT 封包阻塞導致漏接按鍵
+          board.samplingInterval = 250;
+          boardInstances[player] = board;
+          updateBoardStatus(player, "connected", `🟢 已連線 (${deviceId})`);
+
+          const monitorEl = document.getElementById("hwSignalText");
+          const triggerHandler = (btnType, sourceLabel) => {
+            if (monitorEl) {
+              const nowStr = new Date().toLocaleTimeString("zh-TW", { hour12: false });
+              monitorEl.textContent = `⚡ [${nowStr}] 玩家 ${player} (${deviceId}) 觸發 ${btnType} 鍵（來源：${sourceLabel}）`;
+            }
+            if (player === "A") {
+              pressA(btnType);
+            } else {
+              pressB(btnType);
+            }
+          };
+
+          // 初始化板載 LED 矩陣並顯示目前數字（延遲 150ms 避免與按鍵初始化搶通道）
+          setTimeout(() => {
+            try {
+              if (typeof getBitLedMatrix === "function") {
+                const matrix = getBitLedMatrix(board);
+                boardMatrices[player] = matrix;
+                const initDigit = player === "A" ? currentDigits[lockedA] : currentDigits[2 + lockedB];
+                matrix.showString(String(initDigit));
+              }
+            } catch (mErr) {
+              console.warn("LED 矩陣初始化略過：", mErr);
+            }
+          }, 150);
+
+          // 綁定 Web:Bit 內建 A 鍵 (35) 與 B 鍵 (27)，並兼容不同事件名稱
+          try {
+            const buttonA = getBitButton(board, 35);
+            const buttonB = getBitButton(board, 27);
+
+            buttonA.on("pressed", function () {
+              triggerHandler("A", "實體A鍵(pressed)");
+            });
+            buttonA.on("released", function () {
+              triggerHandler("A", "實體A鍵(released)");
+            });
+
+            buttonB.on("pressed", function () {
+              triggerHandler("B", "實體B鍵(pressed)");
+            });
+            buttonB.on("released", function () {
+              triggerHandler("B", "實體B鍵(released)");
+            });
+          } catch (err) {
+            console.error("getBitButton 綁定失敗：", err);
+            if (monitorEl) {
+              monitorEl.textContent = `❌ 玩家 ${player} 按鍵綁定失敗：${err.message}`;
+            }
+            return;
+          }
+
+          if (monitorEl) {
+            monitorEl.textContent = `✅ 玩家 ${player} (${deviceId}) 連線成功！請按板子上的 A 鍵測試 +1`;
+          }
+        });
+      } catch (e) {
+        updateBoardStatus(player, "idle", `🔴 連線失敗 (${deviceId})`);
+      }
+    }
+
+    // ================= 設定後台與彈窗控制 =================
+    function openSettings() {
+      document.getElementById("cfgDuration").value = config.duration;
+      document.getElementById("cfgPenalty").value = config.penalty;
+      document.getElementById("cfgDeviceA").value = config.deviceA || "";
+      document.getElementById("cfgDeviceB").value = config.deviceB || "";
+      document.getElementById("cfgCodeMode").value = config.codeMode;
+      document.getElementById("cfgFixedCode").value = config.fixedCode;
+      document.getElementById("cfgHintModeA").value = config.hintModeA;
+      document.getElementById("cfgHintModeB").value = config.hintModeB;
+      document.getElementById("cfgWireMode").value = config.wireMode;
+      document.getElementById("cfgCorrectWire").value = config.correctWire;
+      document.getElementById("cfgFilterText").value = config.filterText;
+      document.getElementById("cfgSecretClue").value = config.secretClue;
+      document.getElementById("cfgShowSim").value = String(config.showSim);
+
+      const modal = document.getElementById("settingsModal");
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    }
+
+    function closeSettings() {
+      const modal = document.getElementById("settingsModal");
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
     }
 
     function applyDifficultyPreset(level) {
@@ -1316,38 +1344,19 @@
       }
     }
 
-    function openSettings() {
-      document.getElementById("cfgDuration").value = config.duration;
-      document.getElementById("cfgPenalty").value = config.penalty;
-      document.getElementById("cfgDeviceA").value = config.deviceA;
-      document.getElementById("cfgDeviceB").value = config.deviceB;
-      document.getElementById("cfgCodeMode").value = config.codeMode;
-      document.getElementById("cfgFixedCode").value = config.fixedCode;
-      document.getElementById("cfgHintModeA").value = config.hintModeA;
-      document.getElementById("cfgHintModeB").value = config.hintModeB;
-      document.getElementById("cfgWireMode").value = config.wireMode;
-      document.getElementById("cfgCorrectWire").value = config.correctWire;
-      document.getElementById("cfgFilterText").value = config.filterText;
-      document.getElementById("cfgSecretClue").value = config.secretClue;
-      document.getElementById("cfgShowSim").value = String(config.showSim);
-      const modal = document.getElementById("settingsModal");
-      modal.classList.remove("hidden");
-      modal.classList.add("flex");
-    }
-
-    function closeSettings() {
-      const modal = document.getElementById("settingsModal");
-      modal.classList.add("hidden");
-      modal.classList.remove("flex");
-    }
-
     function saveAndApplyConfig() {
-      config.duration = Math.max(10, Number(document.getElementById("cfgDuration").value) || 180);
-      config.penalty = Math.max(0, Number(document.getElementById("cfgPenalty").value) || 0);
+      const prevDevA = config.deviceA;
+      const prevDevB = config.deviceB;
+
+      config.duration = Math.max(15, parseInt(document.getElementById("cfgDuration").value, 10) || 180);
+      config.penalty = Math.max(0, parseInt(document.getElementById("cfgPenalty").value, 10) || 0);
       config.deviceA = document.getElementById("cfgDeviceA").value.trim();
       config.deviceB = document.getElementById("cfgDeviceB").value.trim();
       config.codeMode = document.getElementById("cfgCodeMode").value;
-      config.fixedCode = document.getElementById("cfgFixedCode").value.trim() || "7349";
+      const rawFixed = document.getElementById("cfgFixedCode").value.trim();
+      if (/^\d{4}$/.test(rawFixed)) {
+        config.fixedCode = rawFixed;
+      }
       config.hintModeA = document.getElementById("cfgHintModeA").value;
       config.hintModeB = document.getElementById("cfgHintModeB").value;
       config.wireMode = document.getElementById("cfgWireMode").value;
@@ -1358,8 +1367,14 @@
 
       saveConfigToStorage();
       closeSettings();
-      connectWebduinoBoards();
       resetGame();
+
+      if (config.deviceA !== prevDevA) {
+        connectSingleBoard("A", config.deviceA);
+      }
+      if (config.deviceB !== prevDevB) {
+        connectSingleBoard("B", config.deviceB);
+      }
     }
 
     function restoreDefaultConfig() {
@@ -1368,10 +1383,28 @@
       openSettings();
     }
 
-    window.onload = function () {
-      connectWebduinoBoards();
+    function showResultModal(icon, title, desc, borderClass) {
+      document.getElementById("resultModalIcon").textContent = icon;
+      document.getElementById("resultModalTitle").textContent = title;
+      document.getElementById("resultModalDesc").textContent = desc;
+      const box = document.getElementById("resultModalBox");
+      box.className = `bg-slate-900 border-2 ${borderClass || "border-amber-400"} rounded-2xl max-w-md w-full p-6 text-center space-y-4 shadow-2xl`;
+      const modal = document.getElementById("resultModal");
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    }
+
+    function closeResultModal() {
+      const modal = document.getElementById("resultModal");
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
       resetGame();
-    };
+      if (config.deviceA) connectSingleBoard("A", config.deviceA);
+      if (config.deviceB) connectSingleBoard("B", config.deviceB);
+    });
   </script>
 </body>
 </html>
